@@ -2,7 +2,7 @@ import type { On, TurnStepChunk, TurnStepResult } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 import { expect, mock, test } from 'claude-code/testing'
 
-import { CACHE_FG, DEFAULT, FIGURES, LIVE, RAMP, SEP, decodeCells } from '../hooks/cells'
+import { DEFAULT, FIGURES, LIVE, RAMP, SEP, decodeCells } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 
 const NOW = Date.parse('2026-10-14T10:00:00Z')
@@ -283,9 +283,9 @@ test('the running turn counts up per response', { options: EFFECTS_OFF }, async 
   const counted = rowText(after)
   expect(counted).toContain('│ $0.050 │ 10K↓ 500↑')
   expect(counted).not.toContain('%c')
-  // 90% of the three digits of 10K are teal text: all three, on the default background.
+  // The three cells of 10K are plain gray text on the default background.
   const k = counted.indexOf('10K')
-  expect(rowCells(after).slice(k, k + 3).every(c => c.fg === CACHE_FG && c.bg === DEFAULT)).toBe(true)
+  expect(rowCells(after).slice(k, k + 3).every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
 })
 
 test('colors read against the median of the session', { options: EFFECTS_OFF }, async ($, on) => {
@@ -502,8 +502,7 @@ test(
     expect(row).toContain('312K in · 2.1K out')
     expect(row).not.toContain('% cache')
     const k = row.indexOf('312K in')
-    expect(cells.slice(k, k + 4).every(c => c.fg === CACHE_FG)).toBe(true)
-    expect(cells.slice(k + 4, k + 7).every(c => c.fg === FIGURES)).toBe(true)
+    expect(cells.slice(k, k + 7).every(c => c.fg === FIGURES)).toBe(true)
     expect(cells.slice(k, k + 18).every(c => c.bg === DEFAULT)).toBe(true)
     expect(await hint(await mount($, PANE))).toContain('Priciest: #2 FIX $0.42')
   },
@@ -575,7 +574,7 @@ test('the cache percent shows beside the input figure when on', { options: { ...
   const row = cellText(cells)
   expect(row).toContain('│ 312K↓ (94%c) 2.1K↑')
   const k = row.indexOf('(94%c)')
-  expect(cells.slice(k, k + 6).every(c => c.fg === CACHE_FG && c.bg === DEFAULT)).toBe(true)
+  expect(cells.slice(k, k + 6).every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
 })
 
 test('gapAbove off draws the row right under the lines above', { options: { ...EFFECTS_OFF, gapAbove: 'off' } }, async ($, on) => {

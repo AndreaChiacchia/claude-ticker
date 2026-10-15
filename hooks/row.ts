@@ -1,8 +1,7 @@
 import type { Entry, Live } from '../types'
-import { isTweening, pickFocus, pruneTweens, tweenColorTo, tweenTo } from './anim'
+import { isTweening, pickFocus, pruneTweens, tokenText, turnUsage, tweenColorTo, tweenTo } from './anim'
 import type { Anim, Odo, Scene } from './anim'
 import {
-  CACHE_FG,
   CHEAP,
   DARK,
   DEFAULT,
@@ -18,6 +17,8 @@ import {
   LIVE_BUMP,
   LIVE_FILL,
   SEP,
+  TOKEN_FLASH_DOWN,
+  TOKEN_FLASH_UP,
   WHITE,
   blank,
   isBright,
@@ -29,7 +30,7 @@ import {
   textCells,
 } from './cells'
 import type { Cell, Display } from './cells'
-import { addUsage, formatCost, formatDelta, formatPercentDelta, formatTokens, logShare, rampFor } from './format'
+import { formatCost, formatDelta, formatPercentDelta, formatTokens, logShare, rampFor } from './format'
 import type { Delta } from './format'
 
 export type Style = 'meter' | 'chart' | 'strip'
@@ -243,32 +244,35 @@ export function badgeCells(anim: Anim, still: boolean): Cell[] {
   return cells.slice(0, 12)
 }
 
+/** One token figure as drawn: its text (left-padded while it rolls) and, while its changed characters flash, the index they start at and the direction. */
+export type TokenFigure = { text: string; flash: { from: number; dir: 'up' | 'down' } | null }
+
 /**
- * The token figures: `312K↓ 2.1K↑` (or `312K in · 2.1K out` when labeled). The first characters of the input number,
- * as many as the cached `share` of it, are teal text; with `isDim` (no usage yet) everything is dim gray, no teal. No background anywhere.
- * With `showPercent` (and usage), the cached share also reads as teal text right after the input figure:
- * `312K↓ (94%c) 2.1K↑`, or `312K in (94% cached) · 2.1K out` when labeled.
+ * The token figures: `312K↓ 2.1K↑` (or `312K in · 2.1K out` when labeled), all in the figures gray (dim gray before the
+ * turn has usage), no background. While a figure rolls its changed characters flash warm white going up, ice blue going
+ * down. With `showPercent` the cached `share` reads `(94%c)` / `(94% cached)` in the same gray right after the input figure.
  */
 export function tokenCells(
-  tokensIn: number,
-  tokensOut: number,
+  input: TokenFigure,
+  output: TokenFigure,
   share: number,
   labeled: boolean,
   isDim: boolean,
   showPercent = false,
 ): Cell[] {
-  const input = formatTokens(tokensIn)
-  const output = formatTokens(tokensOut)
   const fg = isDim ? SEP : FIGURES
-  const length = Array.from(input).length
-  const tinted = isDim || share <= 0 ? 0 : Math.min(length, Math.max(1, Math.round(share * length)))
-  const head = textCells(input, fg).map((cell, i) => (i < tinted ? { ...cell, fg: CACHE_FG } : cell))
+  const figure = (f: TokenFigure): Cell[] => {
+    const flash = f.flash
+    const flashFg = flash === null ? fg : flash.dir === 'up' ? TOKEN_FLASH_UP : TOKEN_FLASH_DOWN
+
+    return textCells(f.text, fg).map((cell, i) => (flash !== null && i >= flash.from ? { ...cell, fg: flashFg } : cell))
+  }
   const percent = Math.round(clamp01(share) * 100)
-  const note = showPercent && !isDim && tokensIn > 0 ? textCells(labeled ? ` (${percent}% cached)` : ` (${percent}%c)`, CACHE_FG) : []
+  const note = showPercent && !isDim ? textCells(labeled ? ` (${percent}% cached)` : ` (${percent}%c)`, fg) : []
 
   return labeled
-    ? [...head, ...textCells(' in', fg), ...note, ...textCells(` · ${output} out`, fg)]
-    : [...head, ...textCells('↓', fg), ...note, ...textCells(` ${output}↑`, fg)]
+    ? [...figure(input), ...textCells(' in', fg), ...note, ...textCells(' · ', fg), ...figure(output), ...textCells(' out', fg)]
+    : [...figure(input), ...textCells('↓', fg), ...note, ...textCells(' ', fg), ...figure(output), ...textCells('↑', fg)]
 }
 
 // ---- the context every style draws from --------------------------------------------------------
@@ -330,19 +334,7 @@ function makeCtx(scene: Scene, anim: Anim, settings: Settings, still: boolean): 
   const focused = live !== null ? undefined : entries.find(x => x.n === focusN)
   if (live === null && focused === undefined) return null
   const turnTarget = live !== null ? live.costUsd : (focused?.costUsd ?? 0)
-  let tokensIn = 0
-  let tokensOut = 0
-  let cacheRead = 0
-  if (live) {
-    const u = addUsage(live.main, live.agent)
-    tokensIn = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
-    tokensOut = u.output_tokens
-    cacheRead = u.cache_read_input_tokens
-  } else if (focused) {
-    tokensIn = focused.tokensIn
-    tokensOut = focused.tokensOut
-    cacheRead = focused.cacheRead
-  }
+  const { tokensIn, tokensOut, cacheRead } = turnUsage(scene, focusN)
   const isGrowing = live === null && scene.growing.includes(focusN)
   const isOlder = live === null && focusN !== lastN
   const at = entries.findIndex(x => x.n === focusN)
@@ -392,14 +384,6 @@ function easeColor(c: Ctx, key: string, target: number): number {
   c.keys.add(key)
 
   return tweenColorTo(c.anim, key, target, true)
-}
-
-/** The number under `key` rolled toward `target` like an odometer (the token counts): with `stock` only, never on a still frame. */
-function roll(c: Ctx, key: string, target: number): number {
-  if (c.still || !c.settings.effects.stock) return target
-  c.keys.add(key)
-
-  return tweenTo(c.anim, key, target, true)
 }
 
 /** True when the finished turn `n` shimmers because a background helper is still adding to it. */
@@ -480,11 +464,17 @@ function deltaPart(c: Ctx): Part {
   return { group: 'delta', cells: d === null ? [] : [space(), ...textCells(d.text, DELTA_COLOR[d.dir])], reserve: 7 }
 }
 
-/** The token counts roll under `stock`; the cached share of the input number slides with `grow`. */
+/** One token figure: rolling (padded to its target's width, the changed characters flashing) under `stock` on a moving frame, else exactly the target. */
+function tokenFigure(c: Ctx, odo: Odo, target: number): TokenFigure {
+  const rolling = !c.still && c.settings.effects.stock && odo.target === target
+  if (!rolling) return { text: formatTokens(target), flash: null }
+
+  return { text: tokenText(odo), flash: c.anim.tick < odo.flashUntil ? { from: odo.flashFrom, dir: odo.flashDir } : null }
+}
+
+/** The token counts roll like claudespotter's odometer under `stock` (stepped in `advance`, their changed characters flashing); the cached share of the `(94%c)` note eases with `grow`. */
 function tokensPart(c: Ctx): Part {
   const labeled = c.settings.display.tokens === 'labeled'
-  const shownIn = Math.round(roll(c, `tin:${c.n}`, c.tokensIn))
-  const shownOut = Math.round(roll(c, `tout:${c.n}`, c.tokensOut))
   const share = ease(c, `cache:${c.n}`, c.tokensIn > 0 ? c.cacheRead / c.tokensIn : 0)
 
   const showPercent = c.settings.display.cachePercent === 'on'
@@ -492,7 +482,14 @@ function tokensPart(c: Ctx): Part {
   // The percent note goes with the group (one drop unit): up to ` (100%c)` (8 cells) or ` (100% cached)` (14 cells) more.
   return {
     group: 'tokens',
-    cells: tokenCells(shownIn, shownOut, share, labeled, c.isEmptyLive, showPercent),
+    cells: tokenCells(
+      tokenFigure(c, c.anim.tokensIn, c.tokensIn),
+      tokenFigure(c, c.anim.tokensOut, c.tokensOut),
+      share,
+      labeled,
+      c.isEmptyLive,
+      showPercent && c.tokensIn > 0,
+    ),
     reserve: (labeled ? 18 : 11) + (showPercent ? (labeled ? 14 : 8) : 0),
   }
 }

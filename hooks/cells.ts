@@ -20,8 +20,10 @@ export const FLASH_UP = 0x5fff00
 export const FLASH_DOWN = 0xff0000
 export const HIGH_BG = 0xd70000
 export const CHEAP = 0x5fff00
-/** The cached share of the input-token number: the first digits in a mid teal text color (no background). */
-export const CACHE_FG = 0x5fafaf
+/** The token digits that changed, going up: claudespotter's warm white-gold glint. */
+export const TOKEN_FLASH_UP = 0xfff5d7
+/** The token digits that changed, going down: claudespotter's ice-cyan glint. */
+export const TOKEN_FLASH_DOWN = 0x5fd7ff
 
 /** The teal scale of finished turns, cheap to pricey. */
 export const RAMP: readonly number[] = [0x005f5f, 0x008787, 0x00afaf, 0x5fd7d7]

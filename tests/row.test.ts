@@ -3,6 +3,7 @@ import { expect, test } from 'claude-code/testing'
 import type { Entry, Live } from '../types'
 import {
   FOCUS_HOLD,
+  TOKEN_FLASH_FRAMES,
   advance,
   createAnim,
   isFocusSettled,
@@ -12,14 +13,15 @@ import {
   raiseBadge,
   setOdo,
   stepOdo,
+  stepTokenOdo,
   syncTargets,
+  tokenText,
   tweenColorTo,
   tweenTo,
   tweenValue,
 } from '../hooks/anim'
 import type { Focus, Odo, Scene } from '../hooks/anim'
 import {
-  CACHE_FG,
   DARK,
   DEFAULT,
   DEFAULT_DISPLAY,
@@ -30,15 +32,16 @@ import {
   LIVE_FILL,
   RAMP,
   SEP,
+  TOKEN_FLASH_UP,
   UP,
   WHITE,
   lighten,
   mixColor,
 } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
-import { formatCost, logShare } from '../hooks/format'
+import { formatCost, formatTokens, logShare } from '../hooks/format'
 import { composeRow, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells } from '../hooks/row'
-import type { StripItem } from '../hooks/row'
+import type { StripItem, TokenFigure } from '../hooks/row'
 
 const EFFECTS_OFF = { reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
 
@@ -67,6 +70,9 @@ const SYMBOLS = ['EXPLAI', 'FIX', 'ALPHA', 'BRAVO', 'CHARLI', 'DELTA']
 const entriesOf = (costs: number[]): Entry[] => costs.map((costUsd, i) => entry({ n: i + 1, symbol: SYMBOLS[i] ?? 'TURN', costUsd }))
 
 const text = (cells: Cell[]): string => cells.map(c => String.fromCodePoint(c.cp)).join('')
+
+/** A token figure at rest: its formatted text, no flash. */
+const fig = (n: number): TokenFigure => ({ text: formatTokens(n), flash: null })
 
 const live = (over: Partial<Live> = {}): Live => ({
   turnId: 'live-1',
@@ -142,7 +148,7 @@ test('normalizeSettings: strip turns', () => {
   expect(normalizeSettings({ stripTurns: '10' }).stripTurns).toBe(12)
 })
 
-test('meter, still: the left core, the label, the Blocks bar, the dividers and the figures with the cache digits', () => {
+test('meter, still: the left core, the label, the Blocks bar, the dividers and the figures in plain gray', () => {
   const { cells } = reference(EFFECTS_OFF, 100)
   const row = text(cells)
   expect(cells.length).toBe(100)
@@ -159,9 +165,9 @@ test('meter, still: the left core, the label, the Blocks bar, the dividers and t
   expect(cells[10]?.cp).toBe(0x25cf)
   expect(cells[10]?.fg).toBe(SEP)
   expect(cells.find(c => c.cp === 0x25b2)?.fg).toBe(UP)
-  // The cached share of the input number is teal text; no cell of the row has a background.
+  // The token figures are plain gray; no cell of the row has a background.
   const at = row.indexOf('312K')
-  expect(cells.slice(at, at + 4).every(c => c.fg === CACHE_FG && c.bg === DEFAULT)).toBe(true)
+  expect(cells.slice(at, at + 4).every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
   expect(cells[at + 4]?.cp).toBe(0x2193)
   expect(cells[at + 4]?.fg).toBe(FIGURES)
   expect(cells[at + 4]?.bg).toBe(DEFAULT)
@@ -426,58 +432,47 @@ test('change off keeps one divider pair around the cost', () => {
   expect(row).not.toContain('▲')
 })
 
-test('tokenCells: the cached share of the input number is teal text, the arrows are not', () => {
-  const colored = (cells: Cell[]): number => cells.filter(c => c.fg === CACHE_FG).length
-  const all = tokenCells(312_400, 2100, 0.94, false, false)
-  expect(text(all)).toBe('312K↓ 2.1K↑')
-  expect(colored(all)).toBe(4)
-  expect(all.slice(0, 4).every(c => c.fg === CACHE_FG)).toBe(true)
-  expect(all[4]?.fg).toBe(FIGURES)
-  expect(all.every(c => c.bg === DEFAULT)).toBe(true)
-  const sliver = tokenCells(312_400, 2100, 0.01, false, false)
-  expect(colored(sliver)).toBe(1)
-  expect(sliver[0]?.fg).toBe(CACHE_FG)
-  expect(sliver[1]?.fg).toBe(FIGURES)
-  expect(colored(tokenCells(312_400, 2100, 0, false, false))).toBe(0)
-  expect(colored(tokenCells(312_400, 2100, 1, false, false))).toBe(4)
+test('tokenCells: every figure is plain gray, whatever the cached share', () => {
+  for (const share of [0, 0.01, 0.5, 0.94, 1]) {
+    const compact = tokenCells(fig(312_400), fig(2100), share, false, false)
+    expect(text(compact)).toBe('312K↓ 2.1K↑')
+    expect(compact.every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
+    const labeled = tokenCells(fig(312_400), fig(2100), share, true, false)
+    expect(text(labeled)).toBe('312K in · 2.1K out')
+    expect(labeled.every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
+  }
 
-  const labeled = tokenCells(312_400, 2100, 0.5, true, false)
-  expect(text(labeled)).toBe('312K in · 2.1K out')
-  expect(colored(labeled)).toBe(2)
-  expect(labeled[0]?.fg).toBe(CACHE_FG)
-  expect(labeled[1]?.fg).toBe(CACHE_FG)
-  expect(labeled[2]?.fg).toBe(FIGURES)
-  expect(labeled.every(c => c.bg === DEFAULT)).toBe(true)
-
-  const dim = tokenCells(0, 0, 0, false, true)
+  const dim = tokenCells(fig(0), fig(0), 0, false, true)
   expect(text(dim)).toBe('0↓ 0↑')
   expect(dim.every(c => c.fg === SEP && c.bg === DEFAULT)).toBe(true)
-  expect(text(tokenCells(0, 0, 0, true, true))).toBe('0 in · 0 out')
+  expect(text(tokenCells(fig(0), fig(0), 0, true, true))).toBe('0 in · 0 out')
+
+  // A flashing figure colors its characters from the flash index on; the rest and the arrow stay gray.
+  const flashing = tokenCells({ text: '2.4K', flash: { from: 2, dir: 'up' } }, fig(2100), 0, false, false)
+  expect(text(flashing)).toBe('2.4K↓ 2.1K↑')
+  expect(flashing.slice(0, 2).every(c => c.fg === FIGURES)).toBe(true)
+  expect(flashing.slice(2, 4).every(c => c.fg === TOKEN_FLASH_UP)).toBe(true)
+  expect(flashing[4]?.fg).toBe(FIGURES)
+  expect(flashing.slice(5).every(c => c.fg === FIGURES)).toBe(true)
 })
 
-test('tokenCells with the cache percent: a teal note right after the input figure, none without usage', () => {
-  const colored = (cells: Cell[]): number => cells.filter(c => c.fg === CACHE_FG).length
-  const on = tokenCells(312_400, 2100, 0.94, false, false, true)
+test('tokenCells with the cache percent: a gray note right after the input figure, none without usage', () => {
+  const on = tokenCells(fig(312_400), fig(2100), 0.94, false, false, true)
   expect(text(on)).toBe('312K↓ (94%c) 2.1K↑')
-  // The four cached digits and the seven cells of ` (94%c)`; the arrows and the output figure keep the figures color.
-  expect(colored(on)).toBe(11)
-  expect(on.slice(5, 12).every(c => c.fg === CACHE_FG)).toBe(true)
-  expect(on[4]?.fg).toBe(FIGURES)
-  expect(on.slice(12).every(c => c.fg === FIGURES)).toBe(true)
-  expect(on.every(c => c.bg === DEFAULT)).toBe(true)
+  expect(on.every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
   // Off (the default) is the old text.
-  expect(text(tokenCells(312_400, 2100, 0.94, false, false))).toBe('312K↓ 2.1K↑')
-  expect(text(tokenCells(312_400, 2100, 0.94, false, false, false))).toBe('312K↓ 2.1K↑')
+  expect(text(tokenCells(fig(312_400), fig(2100), 0.94, false, false))).toBe('312K↓ 2.1K↑')
+  expect(text(tokenCells(fig(312_400), fig(2100), 0.94, false, false, false))).toBe('312K↓ 2.1K↑')
 
-  const labeled = tokenCells(312_400, 2100, 0.5, true, false, true)
+  const labeled = tokenCells(fig(312_400), fig(2100), 0.5, true, false, true)
   expect(text(labeled)).toBe('312K in (50% cached) · 2.1K out')
-  expect(colored(labeled)).toBe(2 + Array.from(' (50% cached)').length)
+  expect(labeled.every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
 
   // Usage with nothing cached reads 0%; no usage yet (dim) or no input at all shows nothing, never (0%c).
-  expect(text(tokenCells(312_400, 2100, 0, false, false, true))).toBe('312K↓ (0%c) 2.1K↑')
-  expect(text(tokenCells(0, 0, 0, false, true, true))).toBe('0↓ 0↑')
-  expect(text(tokenCells(0, 0, 0, true, true, true))).toBe('0 in · 0 out')
-  expect(text(tokenCells(0, 0, 0, false, false, true))).toBe('0↓ 0↑')
+  expect(text(tokenCells(fig(312_400), fig(2100), 0, false, false, true))).toBe('312K↓ (0%c) 2.1K↑')
+  expect(text(tokenCells(fig(0), fig(0), 0, false, true, true))).toBe('0↓ 0↑')
+  expect(text(tokenCells(fig(0), fig(0), 0, true, true, true))).toBe('0 in · 0 out')
+  expect(text(tokenCells(fig(0), fig(0), 0, false, false, false))).toBe('0↓ 0↑')
 })
 
 test('the cache percent in the row: off by default, in the tokens group when on, rolling with the eased share', () => {
@@ -530,61 +525,80 @@ test('the cache percent in the row: off by default, in the tokens group when on,
   expect(seen).toEqual(['44', '75', '94', '100'])
 })
 
-test('a 60% cached input colors two of four digits', () => {
-  const cells = tokenCells(312_400, 2100, 0.6, false, false)
-  expect(text(cells)).toBe('312K↓ 2.1K↑')
-  expect(cells.slice(0, 2).every(c => c.fg === CACHE_FG)).toBe(true)
-  expect(cells.slice(2, 4).every(c => c.fg === FIGURES)).toBe(true)
-  expect(cells.every(c => c.bg === DEFAULT)).toBe(true)
-  const dim = tokenCells(312_400, 2100, 0.6, false, true)
-  expect(dim.every(c => c.fg === SEP)).toBe(true)
-})
-
-test('the cached digits slide with grow', () => {
-  const anim = createAnim()
-  tweenTo(anim, 'cache:2', 0, true)
-  tweenTo(anim, 'cache:2', 1, true)
-  const counts: number[] = []
-  for (const t of [1, 2, 3, 4]) {
-    anim.tick = t
-    const share = tweenValue(anim, 'cache:2') ?? 0
-    counts.push(tokenCells(312_400, 2100, share, false, false).filter(c => c.fg === CACHE_FG).length)
-  }
-  expect(counts).toEqual([2, 3, 4, 4])
-})
-
 test('token counts roll under stock, and stay put without it', () => {
-  const rolled = (options: Record<string, unknown>, ticks: number[]): string[] => {
-    const settings = normalizeSettings(options)
-    const anim = createAnim()
-    const at = (input: number): Scene => ({
-      entries: entriesOf([0.1]),
-      live: live({
-        main: { input_tokens: input, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
-      }),
-      ledger: null,
-      growing: [],
-    })
-    syncTargets(anim, at(10_000), settings, 's')
-    composeRow(at(10_000), anim, settings, 100, false)
-    // The new figure arrives at tick 0; the counts then ease over the next four frames.
-    composeRow(at(1_200_000), anim, settings, 100, false)
-    const seen: string[] = []
-    for (const t of ticks) {
-      anim.tick = t
-      const cells = composeRow(at(1_200_000), anim, settings, 100, false).cells
-      const row = text(cells)
-      const i = row.indexOf('↓ 500↑')
-      seen.push(row.slice(Math.max(0, i - 4), i))
-      // Nothing is cached here: no tint, and the digits keep their usual color.
-      expect(cells.slice(Math.max(0, i - 4), i).every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
-    }
+  const at = (input: number): Scene => ({
+    entries: entriesOf([0.1]),
+    live: live({
+      main: { input_tokens: input, output_tokens: 500, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 },
+    }),
+    ledger: null,
+    growing: [],
+  })
+  const base = { reacts: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
 
-    return seen
+  // stock on: the input figure steps once per frame toward 1.2M, right-aligned to the width of its target.
+  const settings = normalizeSettings(base)
+  const anim = createAnim()
+  syncTargets(anim, at(10_000), settings, 's')
+  syncTargets(anim, at(1_200_000), settings, 's')
+  const seen: string[] = []
+  const frames: Cell[][] = []
+  for (let f = 0; f < 9; f++) {
+    advance(anim, settings.effects)
+    const cells = composeRow(at(1_200_000), anim, settings, 100, false).cells
+    const row = text(cells)
+    const i = row.indexOf('↓ 500↑')
+    seen.push(row.slice(i - 4, i))
+    frames.push(cells.slice(i - 4, i))
   }
-  const on = { reacts: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
-  expect(rolled(on, [1, 2, 3, 4])).toEqual(['530K', '902K', '1.1M', '1.2M'])
-  expect(rolled({ ...on, stock: 'off' }, [0])).toEqual(['1.2M'])
+  expect(seen).toEqual(['307K', '530K', '697K', '823K', '923K', '  1M', '1.1M', '1.2M', '1.2M'])
+  // The first step changes every character: all four flash warm white.
+  expect(frames[0]?.every(c => c.fg === TOKEN_FLASH_UP && c.bg === DEFAULT)).toBe(true)
+  // 1.1M -> 1.2M changes only the third character on: the first two stay gray.
+  expect(frames[7]?.slice(0, 2).every(c => c.fg === FIGURES)).toBe(true)
+  expect(frames[7]?.slice(2).every(c => c.fg === TOKEN_FLASH_UP)).toBe(true)
+
+  // stock off: the figure reads its target at once, with no flash.
+  const off = normalizeSettings({ ...base, stock: 'off' })
+  const still = createAnim()
+  syncTargets(still, at(10_000), off, 's')
+  syncTargets(still, at(1_200_000), off, 's')
+  advance(still, off.effects)
+  const cells = composeRow(at(1_200_000), still, off, 100, false).cells
+  const row = text(cells)
+  const i = row.indexOf('↓ 500↑')
+  expect(row.slice(i - 4, i)).toBe('1.2M')
+  expect(cells.slice(i - 4, i).every(c => c.fg === FIGURES && c.bg === DEFAULT)).toBe(true)
+})
+
+test('stepTokenOdo steps like claudespotter and flashes the changed digits', () => {
+  const odo = (shown: number, target: number): Odo => ({ shown, target, flashFrom: 0, flashUntil: 0, flashDir: 'up' })
+
+  // 2.1K -> 2.4K in one step; only the characters from the third on changed.
+  const a = odo(2100, 2400)
+  stepTokenOdo(a, 1)
+  expect(a.shown).toBe(2400)
+  expect(a.flashFrom).toBe(2)
+  expect(a.flashUntil).toBe(4)
+  expect(a.flashDir).toBe('up')
+
+  // 0 -> 100: a quarter of the gap each frame, at least one unit.
+  const b = odo(0, 100)
+  const shown: number[] = []
+  for (let t = 1; t <= 14; t++) {
+    stepTokenOdo(b, t)
+    shown.push(b.shown)
+    if (t === 1) expect(b.flashFrom).toBe(1)
+  }
+  expect(shown).toEqual([25, 44, 58, 69, 77, 83, 88, 91, 94, 96, 97, 98, 99, 100])
+
+  // The text is right-aligned to the width of the target's text.
+  expect(tokenText(odo(999, 1200))).toBe(' 999')
+
+  // A settled odometer is left untouched, flash fields included.
+  const c: Odo = { shown: 5, target: 5, flashFrom: 3, flashUntil: 9, flashDir: 'down' }
+  stepTokenOdo(c, 20)
+  expect(c).toEqual({ shown: 5, target: 5, flashFrom: 3, flashUntil: 9, flashDir: 'down' })
 })
 
 test('the change updates at once: never rolled, never flashed', () => {
@@ -802,6 +816,50 @@ test('a focus switch snaps the cost, held 2 s, then it rolls', () => {
   advance(anim, settings.effects)
   expect(anim.turn.shown).toBeGreaterThan(0.8)
   expect(1).toBeGreaterThan(anim.turn.shown)
+})
+
+test('token figures snap on a focus switch and roll within a turn, keeping isSettled false while they move', () => {
+  const settings = normalizeSettings({ reacts: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' })
+  const entries = [
+    entry({ n: 1, symbol: 'EXPLAI', costUsd: 0.2, tokensIn: 50_000, tokensOut: 800 }),
+    entry({ n: 2, symbol: 'FIX', costUsd: 0.8, tokensIn: 20_000, tokensOut: 400 }),
+    entry({ n: 3, symbol: 'ALPHA', costUsd: 0.05, tokensIn: 312_400, tokensOut: 2100 }),
+  ]
+  const scene = (l: Live | null, growing: number[]): Scene => ({ entries, live: l, ledger: null, growing })
+  const anim = createAnim()
+  syncTargets(anim, scene(null, []), settings, 's')
+  expect(anim.focus?.n).toBe(3)
+  expect(anim.tokensIn.shown).toBe(312_400)
+  expect(anim.tokensOut.shown).toBe(2100)
+
+  // A helper on turn 1: the focus moves after the hold and the figures snap to that turn's counts, with no flash.
+  anim.tick = 20
+  syncTargets(anim, scene(null, [1]), settings, 's')
+  expect(anim.focus?.n).toBe(1)
+  expect(anim.tokensIn.target).toBe(50_000)
+  expect(anim.tokensIn.shown).toBe(anim.tokensIn.target)
+  expect(anim.tokensIn.flashUntil).toBe(0)
+  expect(anim.tokensOut.shown).toBe(800)
+
+  // A new running turn snaps too; the same turn then receiving more usage rolls.
+  const usage = (cacheRead: number): Live =>
+    live({ main: { input_tokens: 1000, output_tokens: 500, cache_read_input_tokens: cacheRead, cache_creation_input_tokens: 0 } })
+  syncTargets(anim, scene(usage(9000), []), settings, 's')
+  expect(anim.tokensIn.shown).toBe(10_000)
+  syncTargets(anim, scene(usage(99_000), []), settings, 's')
+  expect(anim.tokensIn.target).toBe(100_000)
+  expect(anim.tokensIn.shown).toBe(10_000)
+  expect(isSettled(anim)).toBe(false)
+  let frames = 0
+  while (anim.tokensIn.shown !== anim.tokensIn.target && frames < 20) {
+    advance(anim, settings.effects)
+    frames++
+  }
+  expect(anim.tokensIn.shown).toBe(anim.tokensIn.target)
+  // The last step's flash is still showing.
+  expect(isSettled(anim)).toBe(false)
+  for (let i = 0; i < TOKEN_FLASH_FRAMES; i++) advance(anim, settings.effects)
+  expect(isSettled(anim)).toBe(true)
 })
 
 test('syncTargets primes silently, then raises the high and the cheap badges', () => {

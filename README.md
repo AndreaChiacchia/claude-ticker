@@ -2,7 +2,7 @@
 
 ![version](https://img.shields.io/badge/version-0.1.1-blue)
 
-A mod for the Claude Code CLI that draws a live cost row under the prompt, below the [claudepeeker](https://github.com/AndreaChiacchia/claude-peeker) status line and the claudespotter subagent rows. It shows what each turn spends (tokens in and out, the cached share of the input, and cost) while it runs, colored against the rest of the session, so you can see which prompts are expensive. Claudepeeker shows the overall limits; this shows each turn.
+A mod for the Claude Code CLI that draws a live cost row under the prompt, below the [claudepeeker](https://github.com/AndreaChiacchia/claude-peeker) status line and the claudespotter subagent rows. It shows what each turn spends (tokens in and out, and cost) while it runs, colored against the rest of the session, so you can see which prompts are expensive. Claudepeeker shows the overall limits; this shows each turn.
 
 ```
 ╭──────────────────────────────────────────────────────────────────────────────────────╮
@@ -16,7 +16,7 @@ A mod for the Claude Code CLI that draws a live cost row under the prompt, below
   Σ $3.21 │ ● EXPLAI │ FIX 13%  TESTS 4%  EXPLAI 9% │ $0.05 ▼0.37 │ 10K↓ 500↑
 ```
 
-The three rows at the bottom are the same session in the three styles: the meter, the chart and the strip. Every style has the same order: the session total, the name of the turn, the bar (or chart, or strip), the cost and change, the token counts, each part set off by a dim `│`. In the strip the blocks are colored backgrounds, one per turn, each as wide as its share of the last 12 turns by default (setting `stripTurns`: 8, 12, 16 or 24, the running one included), with a blank cell between them, or a thin line when many blocks must fit. In `312K↓` the teal digits at the start of `312K` are the share of the input read from the prompt cache (here nearly all of it: all four digits are teal; at about 60% cached, `31` would be teal and `2K` gray). The pulsing `●` is only in the label before the turn name; the bars and blocks carry no dot. When the row shows an earlier turn whose background helper is still working, a lavender `↻` takes the place of the dot. A blank line separates the row from the lines above it (setting `gapAbove`).
+The three rows at the bottom are the same session in the three styles: the meter, the chart and the strip. Every style has the same order: the session total, the name of the turn, the bar (or chart, or strip), the cost and change, the token counts, each part set off by a dim `│`. In the strip the blocks are colored backgrounds, one per turn, each as wide as its share of the last 12 turns by default (setting `stripTurns`: 8, 12, 16 or 24, the running one included), with a blank cell between them, or a thin line when many blocks must fit. The pulsing `●` is only in the label before the turn name; the bars and blocks carry no dot. When the row shows an earlier turn whose background helper is still working, a lavender `↻` takes the place of the dot. A blank line separates the row from the lines above it (setting `gapAbove`).
 
 ## Features
 
@@ -26,7 +26,7 @@ The three rows at the bottom are the same session in the three styles: the meter
   - **strip**: the last 12 turns by default (setting `stripTurns`: 8, 12, 16 or 24; the running one included) side by side, each block as wide as its share of them, colored on the same teal scale, with a blank cell between blocks, or, when all the wanted turns do not fit that way, touching blocks with a thin dark line at the left edge of each. The % in a block is its share of the turns shown. The turn's name and share sit inside the block where they fit (setting `stripLabels` turns the text off). Older turns are in the `/ticker` table. When a turn starts, the oldest block shrinks away and the lavender live block appears; when a turn ends nothing empties, its block stays and blends to teal.
 - **Five effects**, each on or off (all on by default):
   - `reacts`: the row moves on every step of a turn. Each tool call flashes its name at the right edge and bumps the bar, and the live marker pulses.
-  - `stock`: costs and the token counts roll like an odometer; the Σ and cost digits that change flash (green going up, red going down). The ▲/▼ change switches at once.
+  - `stock`: costs and the token counts roll like an odometer. The Σ and cost digits that change flash (green going up, red going down); the token counts step toward their new value like the claudespotter token figure, their changed digits flashing (warm white going up, ice blue going down). The ▲/▼ change switches at once.
   - `celebrate`: a cheap, well-cached turn sparkles green, and a new session high pulses red (`‼ NEW HIGH ‼`).
   - `shimmer`: while Claude streams a response, the current turn shimmers: a light sweep runs over the filled part of the meter and over the live block of the strip, and the live bar of the chart pulses.
   - `grow`: smooth changes. The meter bar, the chart bars and the strip blocks ease to their new size and color in about 0.4 s instead of jumping.
@@ -35,12 +35,12 @@ The three rows at the bottom are the same session in the three styles: the meter
   - `$0.42` is its cost.
   - `▲0.31` (red) means $0.31 pricier than the turn before; `▼` (green) means cheaper; `=0.00` (gray) means about the same. The session's first turn has none.
   - `312K↓` is the input tokens, cache reads and writes included. `2.1K↑` is the output tokens. A turn starts at `0↓ 0↑` in dim gray until usage arrives.
-  - The teal digits at the start of the input number (`312K`) are the cache hit: the share of the input served from the prompt cache (cheaper). All the digits for a well-cached turn, the first one for a poorly cached one, none for zero. There is no background behind any figure. The exact percentage is in the `/ticker` table, and beside the input figure as `(94%c)` with the setting `cachePercent`.
+  - The token figures are plain gray, with no background. The share of the input served from the prompt cache is in the `/ticker` table, and beside the input figure as `(94%c)` with the setting `cachePercent`.
 - **The name of a turn:** the first word of your prompt that says something, in capitals and cut to 6 letters (`please refactor the parser` is `REFACT`). A slash command shows as `/IWO`.
 - **A live entry:** the turn that is running starts with a pulsing `●` and counts up as it goes, in lavender.
 - **Σ at the left edge:** the session total, exactly as `/cost` shows it.
 - **A teal scale:** the meter bar, the chart bars and the strip blocks run from dim teal (a cheap turn for this session) to bright teal (a pricey one), measured against the session median from the fourth turn on (gray before). Names and costs of finished turns keep the default text color. The running turn is lavender. `▲` is red and `▼` green, as before.
-- **Smooth changes:** bars, chart columns, strip blocks and the cache digits ease to their new size and color in about 0.4 s (setting `grow`).
+- **Smooth changes:** bars, chart columns and strip blocks ease to their new size and color, and the `(94%c)` cache percent to its new value, in about 0.4 s (setting `grow`).
 - **A table** (`/ticker`): this session turn by turn with a teal swatch column (a turn whose background helper is still working shows `↻`), the priciest turn, and two all-time lists. The top 10 priciest turns each end with their session total, `project/branch` and session title; the top 10 priciest sessions list total, turns, start date, `project/branch` and title. The title is Claude Code's own session title when the session has one at start or resume, otherwise the session's first prompt. The branch needs git; without it only the project folder shows.
 - **Background helpers are credited to their turn:** a subagent launched in turn #71 keeps adding its tokens and cost to #71 after #71 ended, response by response, until it finishes, also when a message (SendMessage) resumes it during a later turn.
 - **The row follows the active turn:** a running turn always has the row. When none runs and a background helper is still working on a finished turn, the row shows that turn: `↻` in lavender before its name, its number when it is not the newest (`↻ #71 FIX`), its cost, change, tokens and bar climbing with each helper response, its chart bar or strip block lavender. When several helpers work, the turn whose helper answered last. The row stays at least 2 s on a turn (a turn that just finished keeps its final figures for 2 s) and settles on the newest turn when everything is done.
@@ -85,7 +85,7 @@ Set them in `/config`, or in settings under `pluginConfigs.claudeticker`. A chan
 | `stripLabels` | `on`, `off` | ` FIX 13%` inside the strip blocks / plain colored blocks |
 | `stripTurns` | `12`, `8`, `16`, `24` | how many recent turns the strip shows |
 | `reacts` | `on`, `off` | the tool name flashes at the edge: `‹Edit›` |
-| `stock` | `on`, `off` | `$0.38` rolls to `$0.39`, `$0.40` with the changed digits flashing; token counts roll too |
+| `stock` | `on`, `off` | `$0.38` rolls to `$0.39`, `$0.40` with the changed digits flashing; token counts roll too, their changed digits flashing |
 | `celebrate` | `on`, `off` | `‼ NEW HIGH ‼` and the green sparkle |
 | `shimmer` | `on`, `off` | a light sweep over the current turn while Claude streams |
 | `grow` | `on`, `off` | bars and blocks ease to their new size / jump |
@@ -93,8 +93,8 @@ Set them in `/config`, or in settings under `pluginConfigs.claudeticker`. A chan
 | `newHighToast` | `off`, `on` | `Claude-Ticker: new session high $0.50 · FIX "fix the login bug"` |
 | `label` | `symbol`, `prompt`, `number`, `numbered` | `FIX` / `#7 "fix the login…"` / `#7` / `#7 FIX` (number and symbol) (a turn shown while its helper works: `↻ #7 FIX`, always with its number when it is not the newest) |
 | `change` | `dollars`, `percent`, `off` | `▲0.31` / `▲282%` / hidden |
-| `tokens` | `compact`, `labeled` | `312K↓ 2.1K↑` / `312K in · 2.1K out` (the cached share as teal digits of the input number) |
-| `cachePercent` | `off`, `on` | digits only / `312K↓ (94%c) 2.1K↑`, or `312K in (94% cached) · 2.1K out` when labeled: the cached share as a teal number after the input figure (nothing before the turn has usage) |
+| `tokens` | `compact`, `labeled` | `312K↓ 2.1K↑` / `312K in · 2.1K out` |
+| `cachePercent` | `off`, `on` | hidden / `312K↓ (94%c) 2.1K↑`, or `312K in (94% cached) · 2.1K out` when labeled: the cached share as a number after the input figure (nothing before the turn has usage) |
 
 All together: `label=prompt`, `change=percent`, `tokens=labeled` gives `#7 "fix the login bug" │ <bar> │ $0.42 ▲282% │ 312K in · 2.1K out`. The strip always names its blocks with the symbol, also with `label=numbered`; `label` shapes the name before the bar.
 
@@ -139,7 +139,7 @@ npx -y -p typescript@5.6.3 tsc -p .
 | `hooks/register.tsx` | the mod: the hooks, the row and its timer, the `/ticker` table and command, the turn and ledger tracking |
 | `hooks/format.ts` | figures: cost, change, tokens, cache hit, turn names |
 | `hooks/cells.ts` | colors, glyphs, the cell encoding |
-| `hooks/anim.ts` | the animation state: odometers, badges, shimmer clock, easing |
+| `hooks/anim.ts` | the animation state: odometers (costs and tokens), badges, shimmer clock, easing |
 | `hooks/row.ts` | the three styles and the width rules |
 | `hooks/history.ts` | the saved sessions, the all-time records and the session summaries |
 | `types/index.d.ts` | the mod's state contract |

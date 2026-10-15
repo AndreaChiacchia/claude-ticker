@@ -1,6 +1,6 @@
 import type { Entry, Live } from '../types'
 import { GLYPH, mixColor } from './cells'
-import { cacheHit, formatCost, shortTool, toneFor } from './format'
+import { addUsage, cacheHit, formatCost, formatTokens, shortTool, toneFor } from './format'
 import type { Effects, Settings } from './row'
 
 /** One animation frame lasts this long. */
@@ -11,6 +11,9 @@ export const GROW_FRAMES = 4
 
 /** The row stays at least this many frames (2 s at 10 frames per second) on a turn before it moves to another. */
 export const FOCUS_HOLD = 20
+
+/** The changed token digits stay flashed this many frames after each roll step (0.3 s; claudespotter's `FLASH_FRAMES` 6 at 50 ms). */
+export const TOKEN_FLASH_FRAMES = 3
 
 export type Odo = { shown: number; target: number; flashFrom: number; flashUntil: number; flashDir: 'up' | 'down' }
 /** Why the row shows a turn: it runs, a background helper is still adding to it, or it is simply the newest. */
@@ -28,6 +31,10 @@ export type Anim = {
   isPrimed: boolean
   sigma: Odo
   turn: Odo
+  /** The focused turn's input tokens, rolling like claudespotter's token figure. */
+  tokensIn: Odo
+  /** The focused turn's output tokens, rolling the same way. */
+  tokensOut: Odo
   badge: Badge
   bumpUntil: number
   lastSeenN: number
@@ -56,6 +63,8 @@ export function createAnim(tick = 0): Anim {
     isPrimed: false,
     sigma: newOdo(),
     turn: newOdo(),
+    tokensIn: newOdo(),
+    tokensOut: newOdo(),
     badge: { kind: 'none', text: '', from: 0, until: 0 },
     bumpUntil: 0,
     lastSeenN: 0,
@@ -104,6 +113,37 @@ export function stepOdo(o: Odo, tick: number): void {
   o.flashFrom = from
   o.flashUntil = tick + 3
   o.flashDir = o.target > old ? 'up' : 'down'
+}
+
+/** The token figure as drawn, right-aligned to the width its target takes (claudespotter's `tokenText`). */
+export function tokenText(o: Odo): string {
+  return formatTokens(o.shown).padStart(formatTokens(o.target).length)
+}
+
+/**
+ * One frame of a token figure: it steps toward its target (a quarter of the gap, at least one unit of its scale) and
+ * the characters from the first changed one flash for `TOKEN_FLASH_FRAMES` frames (claudespotter's token odometer).
+ */
+export function stepTokenOdo(o: Odo, tick: number): void {
+  if (o.shown === o.target) return
+  const unit = o.target < 1000 ? 1 : o.target < 1_000_000 ? 1000 : 100_000
+  const gap = o.target - o.shown
+  const step = Math.min(Math.abs(gap), Math.max(unit, Math.ceil(Math.abs(gap) / 4)))
+  const before = tokenText(o)
+  o.shown += Math.sign(gap) * step
+  const after = tokenText(o)
+  if (before === after) return
+  const common = Math.min(before.length, after.length)
+  let from = common
+  for (let i = 0; i < common; i++) {
+    if (before[i] !== after[i]) {
+      from = i
+      break
+    }
+  }
+  o.flashFrom = from
+  o.flashUntil = tick + TOKEN_FLASH_FRAMES
+  o.flashDir = gap > 0 ? 'up' : 'down'
 }
 
 const PRIORITY: Record<BadgeKind, number> = { none: 0, tool: 1, cheap: 2, high: 3 }
@@ -242,9 +282,27 @@ export function isFocusSettled(anim: Anim, scene: Scene): boolean {
   return f.n === anim.focus.n && f.mode === anim.focus.mode
 }
 
+/** The token figures of turn `n` as the row shows them: the running turn's usage so far while one runs, else the finished entry's. */
+export function turnUsage(scene: Scene, n: number): { tokensIn: number; tokensOut: number; cacheRead: number } {
+  const { live, entries } = scene
+  if (live !== null) {
+    const u = addUsage(live.main, live.agent)
+
+    return {
+      tokensIn: u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
+      tokensOut: u.output_tokens,
+      cacheRead: u.cache_read_input_tokens,
+    }
+  }
+  const e = entries.find(x => x.n === n)
+
+  return { tokensIn: e?.tokensIn ?? 0, tokensOut: e?.tokensOut ?? 0, cacheRead: e?.cacheRead ?? 0 }
+}
+
 /**
- * Chooses the focus for this tick and points the turn odometer at its cost. A switch to another turn snaps the figure
- * (rolling from one turn's cost into another's would read as a change of this one); the same turn growing rolls with `stock`.
+ * Chooses the focus for this tick and points the turn odometer at its cost and the two token odometers at its token
+ * counts. A switch to another turn snaps them (rolling from one turn's figures into another's would read as a change of
+ * this one); the same turn growing rolls with `stock`.
  */
 export function syncFocus(anim: Anim, scene: Scene, stock: boolean, hold: number): void {
   const before = anim.focus
@@ -259,18 +317,25 @@ export function syncFocus(anim: Anim, scene: Scene, stock: boolean, hold: number
     (live !== null && live.turnId !== anim.liveTurnId) ||
     (before.n !== f.n && before.mode !== 'live')
   setOdo(anim.turn, target, jump)
+  const usage = turnUsage(scene, f.n)
+  setOdo(anim.tokensIn, usage.tokensIn, jump)
+  setOdo(anim.tokensOut, usage.tokensOut, jump)
   anim.liveTurnId = live?.turnId ?? null
 }
 
-/** One frame, in this order: the clock, the odometers, the badge expiry. */
+/** One frame, in this order: the clock, the odometers (costs and tokens), the badge expiry. */
 export function advance(anim: Anim, effects: Effects): void {
   anim.tick += 1
   if (effects.stock) {
     stepOdo(anim.sigma, anim.tick)
     stepOdo(anim.turn, anim.tick)
+    stepTokenOdo(anim.tokensIn, anim.tick)
+    stepTokenOdo(anim.tokensOut, anim.tick)
   } else {
     anim.sigma.shown = anim.sigma.target
     anim.turn.shown = anim.turn.target
+    anim.tokensIn.shown = anim.tokensIn.target
+    anim.tokensOut.shown = anim.tokensOut.target
   }
   if (anim.badge.kind !== 'none' && anim.tick >= anim.badge.until) anim.badge = { kind: 'none', text: '', from: 0, until: 0 }
 }
@@ -282,7 +347,14 @@ export function isSettled(anim: Anim): boolean {
     if (!isDone(anim, tw)) return false
   }
 
-  return odoDone(anim.sigma) && odoDone(anim.turn) && anim.badge.kind === 'none' && anim.tick >= anim.bumpUntil
+  return (
+    odoDone(anim.sigma) &&
+    odoDone(anim.turn) &&
+    odoDone(anim.tokensIn) &&
+    odoDone(anim.tokensOut) &&
+    anim.badge.kind === 'none' &&
+    anim.tick >= anim.bumpUntil
+  )
 }
 
 const HIGH_TEXT = String.fromCodePoint(GLYPH.bang) + ' NEW HIGH ' + String.fromCodePoint(GLYPH.bang)
