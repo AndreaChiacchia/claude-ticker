@@ -1,0 +1,108 @@
+{
+  "name": "claudeticker",
+  "version": "0.1.0",
+  "description": "A row under the prompt that shows what each turn spent: a live cost meter, a bar chart of turns or a cost-share strip, with tokens, cache hits and cost colored against the session",
+  "author": { "name": "AndreaChiacchia", "url": "https://github.com/AndreaChiacchia" },
+  "types": "./types/index.d.ts",
+  "license": "MIT",
+  "userConfig": {
+    "style": {
+      "type": "string",
+      "title": "Style",
+      "description": "meter: a bar of blocks that fills while the turn runs, on a fixed dollar scale (full at $2). chart: one small bar per recent turn, its height the cost on a fixed dollar scale. strip: the recent turns side by side (setting Strip turns), each block as wide as its share of them.",
+      "default": "meter",
+      "options": ["meter", "chart", "strip"]
+    },
+    "stripLabels": {
+      "type": "string",
+      "title": "Strip labels",
+      "description": "on: each block of the strip style shows its turn name and share (FIX 13%) where it fits. off: plain colored blocks.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "stripTurns": {
+      "type": "string",
+      "title": "Strip turns",
+      "description": "How many recent turns the strip style shows, the running one included. More turns make narrower blocks: names show only where they fit, and with many blocks a thin line replaces the blank cell between them.",
+      "default": "12",
+      "options": ["8", "12", "16", "24"]
+    },
+    "reacts": {
+      "type": "string",
+      "title": "Reacts during the turn",
+      "description": "on: the row moves on every step of a turn; each tool call flashes its name and bumps the bar, and the live marker pulses.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "stock": {
+      "type": "string",
+      "title": "Stock-market flavour",
+      "description": "on: costs and the token counts roll like an odometer; the Σ and cost digits that change flash, green going up, red going down.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "celebrate": {
+      "type": "string",
+      "title": "Celebrations and alerts",
+      "description": "on: a cheap, well-cached turn sparkles green and a new session high pulses red.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "shimmer": {
+      "type": "string",
+      "title": "Shimmer while tokens flow",
+      "description": "on: while Claude streams a response, the current turn shimmers: the filled part of the meter, the live block of the strip, the live bar of the chart.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "grow": {
+      "type": "string",
+      "title": "Animate changes",
+      "description": "on: the meter bar, the chart bars and the strip blocks ease to their new size and color in about 0.4 s instead of jumping.",
+      "default": "on",
+      "options": ["on", "off"]
+    },
+    "newHighToast": {
+      "type": "string",
+      "title": "New-high toast",
+      "description": "on: a toast when a turn costs more than every earlier turn of the session (from the fourth turn on).",
+      "default": "off",
+      "options": ["off", "on"]
+    },
+    "label": {
+      "type": "string",
+      "title": "Entry label",
+      "description": "What names each turn in the row. symbol: a short word from the prompt (FIX). prompt: the turn number and the first words of the prompt (#7 fix the login). number: the turn number alone (#7). numbered: number and symbol, the turn number then the short word (#7 FIX). While a background helper is still working on a finished turn, the row can show that turn: ↻ before its name, and its number when it is not the newest (↻ #71 FIX).",
+      "default": "symbol",
+      "options": ["symbol", "prompt", "number", "numbered"]
+    },
+    "change": {
+      "type": "string",
+      "title": "Change vs previous turn",
+      "description": "How each turn compares with the one before in the row. dollars: the difference in dollars (up 0.31). percent: the difference in percent (up 282%). off: hidden.",
+      "default": "dollars",
+      "options": ["dollars", "percent", "off"]
+    },
+    "tokens": {
+      "type": "string",
+      "title": "Token figures",
+      "description": "compact: 312K and 2.1K with down and up arrows (input and output tokens; the teal digits at the start of the input number are the share read from the prompt cache). labeled: 312K in · 2.1K out, the same teal digits on the input number.",
+      "default": "compact",
+      "options": ["compact", "labeled"]
+    },
+    "cachePercent": {
+      "type": "string",
+      "title": "Show cache %",
+      "description": "on: the share of the input read from the prompt cache also shows as a number in teal right after the input figure (312K↓ (94%c) 2.1K↑, or 312K in (94% cached) · 2.1K out when labeled). It drops with the token counts on a narrow window, and shows nothing before the turn has usage. off: only the teal digits.",
+      "default": "off",
+      "options": ["off", "on"]
+    },
+    "gapAbove": {
+      "type": "string",
+      "title": "Blank line above the row",
+      "description": "on: one blank line between the row and the lines above it. off: the row sits right under them.",
+      "default": "on",
+      "options": ["on", "off"]
+    }
+  }
+}

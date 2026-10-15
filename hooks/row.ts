@@ -1,0 +1,733 @@
+import type { Entry, Live } from '../types'
+import { isTweening, pickFocus, pruneTweens, tweenColorTo, tweenTo } from './anim'
+import type { Anim, Odo, Scene } from './anim'
+import {
+  CACHE_FG,
+  CHEAP,
+  DARK,
+  DEFAULT,
+  DELTA_COLOR,
+  EMPTY_BAR,
+  FIGURES,
+  FLASH_DOWN,
+  FLASH_UP,
+  GLYPH,
+  HIGH_BG,
+  HOT,
+  LIVE,
+  LIVE_BUMP,
+  LIVE_FILL,
+  SEP,
+  WHITE,
+  blank,
+  isBright,
+  labelText,
+  lighten,
+  normalizeDisplay,
+  rampColor,
+  safeCp,
+  textCells,
+} from './cells'
+import type { Cell, Display } from './cells'
+import { addUsage, formatCost, formatDelta, formatPercentDelta, formatTokens, logShare, rampFor } from './format'
+import type { Delta } from './format'
+
+export type Style = 'meter' | 'chart' | 'strip'
+export type Effects = { reacts: boolean; stock: boolean; celebrate: boolean; shimmer: boolean; grow: boolean }
+export type StripTurns = 8 | 12 | 16 | 24
+export type Settings = {
+  style: Style
+  effects: Effects
+  display: Display
+  stripLabels: boolean
+  stripTurns: StripTurns
+  gapAbove: boolean
+}
+
+const STYLES: readonly Style[] = ['meter', 'chart', 'strip']
+const STRIP_TURN_CHOICES: readonly StripTurns[] = [8, 12, 16, 24]
+
+/** The settings, each falling back to its default when unknown. */
+export function normalizeSettings(options: Record<string, unknown>): Settings {
+  const on = (key: string): boolean => options[key] !== 'off'
+  const turns = Number(options.stripTurns)
+
+  return {
+    style: STYLES.find(s => s === options.style) ?? 'meter',
+    effects: { reacts: on('reacts'), stock: on('stock'), celebrate: on('celebrate'), shimmer: on('shimmer'), grow: on('grow') },
+    display: normalizeDisplay(options),
+    stripLabels: on('stripLabels'),
+    stripTurns: STRIP_TURN_CHOICES.find(t => t === turns) ?? 12,
+    gapAbove: on('gapAbove'),
+  }
+}
+
+const cp = (ch: string): number => safeCp(ch.codePointAt(0) ?? 0x3f)
+const glyph = (code: number, fg: number, bg: number = DEFAULT): Cell => ({ cp: safeCp(code), fg, bg })
+const space = (bg: number = DEFAULT): Cell => ({ cp: 0x20, fg: DEFAULT, bg })
+const clamp01 = (x: number): number => Math.max(0, Math.min(1, x))
+
+/** `s` cut to `n` code points. */
+const cut = (s: string, n: number): string => Array.from(s).slice(0, n).join('')
+
+/** The left eighths a moving bar tip is drawn with: index `eighths - 1`. */
+export const TIP: readonly number[] = [0x258f, 0x258e, 0x258d, 0x258c, 0x258b, 0x258a, 0x2589]
+
+// ---- shimmer ------------------------------------------------------------------------------------
+
+/** How far the cell `i` of an element `w` cells wide is lightened by the sweep at `tick` (a 3-cell highlight, then a pause). */
+export function sweepAmount(i: number, w: number, tick: number): number {
+  const head = tick % (w + 6)
+  const d = Math.abs(i - head)
+
+  return d === 0 ? 0.55 : d === 1 ? 0.3 : 0
+}
+
+/** The lightening of the single chart bar at `tick`: a 4-frame pulse. */
+export function pulseAmount(tick: number): number {
+  return [0, 0.3, 0.55, 0.3][tick % 4] ?? 0
+}
+
+// ---- the small parts ----------------------------------------------------------------------------
+
+/** Block widths for a strip of `cols` cells: each as wide as its share, none under one cell. */
+export function stripWidths(values: number[], cols: number): number[] {
+  const count = values.length
+  if (count === 0) return []
+  const total = values.reduce((s, v) => s + v, 0)
+  if (total <= 0) {
+    const each = Math.floor(cols / count)
+    const widths = values.map(() => each)
+    widths[count - 1] = (widths[count - 1] ?? 0) + (cols - each * count)
+
+    return widths
+  }
+  const raw = values.map(v => (v / total) * cols)
+  const widths = raw.map(r => Math.floor(r))
+  let leftover = cols - widths.reduce((s, w) => s + w, 0)
+  const byFraction = raw
+    .map((r, i) => ({ i, frac: r - Math.floor(r) }))
+    .sort((a, b) => (b.frac !== a.frac ? b.frac - a.frac : b.i - a.i))
+  for (const item of byFraction) {
+    if (leftover <= 0) break
+    widths[item.i] = (widths[item.i] ?? 0) + 1
+    leftover--
+  }
+  for (let i = 0; i < count; i++) {
+    if ((widths[i] ?? 0) > 0) continue
+    let widest = 0
+    for (let j = 1; j < count; j++) {
+      if ((widths[j] ?? 0) > (widths[widest] ?? 0)) widest = j
+    }
+    if ((widths[widest] ?? 0) <= 1) continue
+    widths[widest] = (widths[widest] ?? 0) - 1
+    widths[i] = 1
+  }
+
+  return widths
+}
+
+/** The running turn's block is at least this wide (with a blank cell between blocks; 2 when the blocks touch). */
+const MIN_LIVE = 3
+/** Any other turn's block is at least this wide (with a blank cell between blocks; 1 when the blocks touch). */
+const MIN_TURN = 2
+/** A block shrinking away is at least this wide. */
+const MIN_LEAVING = 1
+
+/** A block of the strip: a finished turn, the running turn, or a turn shrinking out of the window. */
+export type StripItem = { kind: 'turn' | 'live' | 'leaving'; n: number; symbol: string; value: number }
+export type StripBlock = {
+  kind: StripItem['kind']
+  /** The tween key of the block's value. */
+  key: string
+  n: number
+  symbol: string
+  /** The drawn value (eased), which sets the width. */
+  value: number
+  /** The target value. */
+  target: number
+  width: number
+}
+
+/** The least a block is wide: `gap` 1 (blank cell between blocks) live 3, turn 2; `gap` 0 (blocks touch) live 2, turn 1. */
+const minWidth = (b: StripBlock, gap: 0 | 1): number =>
+  b.kind === 'live' ? MIN_LIVE - (1 - gap) : b.kind === 'turn' ? MIN_TURN - (1 - gap) : MIN_LEAVING
+
+/**
+ * The blocks of a strip `S` cells wide, in the order given (leaving blocks first, the running turn last). With `gap` 1
+ * a blank cell sits between neighbours; with `gap` 0 the blocks touch (each later block then starts with a hairline
+ * that belongs to its own width). Widths follow `shown(key, target)`, the eased value of each block (the target by
+ * default). A block under its minimum takes cells, one at a time, from the widest block that stays at or above its own minimum.
+ */
+export function stripLayout(
+  items: StripItem[],
+  S: number,
+  shown: (key: string, target: number) => number = (_key, target) => target,
+  gap: 0 | 1 = 1,
+): StripBlock[] {
+  const blocks: StripBlock[] = items.map(item => {
+    const key = `s:${item.n}`
+
+    return { kind: item.kind, key, n: item.n, symbol: item.symbol, value: shown(key, item.value), target: item.value, width: 0 }
+  })
+  const avail = Math.max(0, S - gap * Math.max(0, blocks.length - 1))
+  const widths = stripWidths(
+    blocks.map(b => b.value),
+    avail,
+  )
+  blocks.forEach((b, i) => {
+    b.width = widths[i] ?? 0
+  })
+  const order = [...blocks.filter(b => b.kind === 'live'), ...blocks.filter(b => b.kind !== 'live')]
+  for (const block of order) {
+    while (block.width < minWidth(block, gap)) {
+      let donor: StripBlock | undefined
+      for (const b of blocks) {
+        if (b === block || b.width - 1 < minWidth(b, gap)) continue
+        if (donor === undefined || b.width > donor.width) donor = b
+      }
+      if (donor === undefined) break
+      donor.width -= 1
+      block.width += 1
+    }
+  }
+
+  return blocks
+}
+
+/**
+ * The `B` cells of the meter bar in the Blocks look: `█` in `fg` for the filled part, `░` dim for the rest.
+ * At rest the filled part is whole cells (at least one when `atLeastOne`); while `isMoving` the tip is an eighth block.
+ */
+export function meterCells(B: number, f: number, fg: number, isMoving: boolean, atLeastOne = false): Cell[] {
+  const ratio = clamp01(f)
+  const cells: Cell[] = []
+  if (isMoving) {
+    let E = Math.round(ratio * B * 8)
+    if (atLeastOne && E < 1) E = 1
+    const whole = Math.floor(E / 8)
+    const part = E % 8
+    for (let i = 0; i < B; i++) {
+      if (i < whole) cells.push(glyph(GLYPH.full, fg))
+      else if (i === whole && part > 0) cells.push(glyph(TIP[part - 1] ?? GLYPH.full, fg))
+      else cells.push(glyph(GLYPH.track, SEP))
+    }
+
+    return cells
+  }
+  const F = ratio > 0 || atLeastOne ? Math.max(1, Math.min(B, Math.round(ratio * B))) : 0
+  for (let i = 0; i < B; i++) cells.push(i < F ? glyph(GLYPH.full, fg) : glyph(GLYPH.track, SEP))
+
+  return cells
+}
+
+/** The 12-cell badge slot: the tool flash, the cheap sparkle or NEW HIGH; blank when none shows, or on a still frame. */
+export function badgeCells(anim: Anim, still: boolean): Cell[] {
+  const b = anim.badge
+  if (still) return blank(12)
+  let cells: Cell[]
+  const phase = Math.floor((anim.tick - b.from) / 2) % 2
+  if (b.kind === 'none') {
+    cells = []
+  } else if (b.kind === 'tool') {
+    cells = textCells(b.text, anim.tick - b.from < 2 ? WHITE : LIVE)
+  } else if (b.kind === 'cheap') {
+    const a = phase === 0 ? GLYPH.star1 : GLYPH.star2
+    const b2 = phase === 0 ? GLYPH.star2 : GLYPH.star1
+    cells = [glyph(a, CHEAP), space(), glyph(b2, CHEAP), space(), glyph(a, CHEAP)]
+  } else {
+    cells = phase === 0 ? textCells(b.text, WHITE, HIGH_BG) : textCells(b.text, HOT)
+  }
+  while (cells.length < 12) cells.push(space())
+
+  return cells.slice(0, 12)
+}
+
+/**
+ * The token figures: `312K↓ 2.1K↑` (or `312K in · 2.1K out` when labeled). The first characters of the input number,
+ * as many as the cached `share` of it, are teal text; with `isDim` (no usage yet) everything is dim gray, no teal. No background anywhere.
+ * With `showPercent` (and usage), the cached share also reads as teal text right after the input figure:
+ * `312K↓ (94%c) 2.1K↑`, or `312K in (94% cached) · 2.1K out` when labeled.
+ */
+export function tokenCells(
+  tokensIn: number,
+  tokensOut: number,
+  share: number,
+  labeled: boolean,
+  isDim: boolean,
+  showPercent = false,
+): Cell[] {
+  const input = formatTokens(tokensIn)
+  const output = formatTokens(tokensOut)
+  const fg = isDim ? SEP : FIGURES
+  const length = Array.from(input).length
+  const tinted = isDim || share <= 0 ? 0 : Math.min(length, Math.max(1, Math.round(share * length)))
+  const head = textCells(input, fg).map((cell, i) => (i < tinted ? { ...cell, fg: CACHE_FG } : cell))
+  const percent = Math.round(clamp01(share) * 100)
+  const note = showPercent && !isDim && tokensIn > 0 ? textCells(labeled ? ` (${percent}% cached)` : ` (${percent}%c)`, CACHE_FG) : []
+
+  return labeled
+    ? [...head, ...textCells(' in', fg), ...note, ...textCells(` · ${output} out`, fg)]
+    : [...head, ...textCells('↓', fg), ...note, ...textCells(` ${output}↑`, fg)]
+}
+
+// ---- the context every style draws from --------------------------------------------------------
+
+type Ctx = {
+  anim: Anim
+  settings: Settings
+  still: boolean
+  entries: Entry[]
+  live: Live | null
+  costs: number[]
+  /** Finished turns with a background helper still at work, by last activity (the most recent last). */
+  growing: number[]
+  /** The number of the newest finished turn (0 when none). */
+  lastN: number
+  /** The focused turn is finished and a background helper is still adding to it. */
+  isGrowing: boolean
+  /** The focused turn is finished and is not the newest one. */
+  isOlder: boolean
+  /** The cost of the turn before the focused one (the newest finished turn while one runs); undefined for the first. */
+  prevCost: number | undefined
+  /** Label and cost color of the turn: lavender while it runs or its helper works, the default text color otherwise. */
+  fg: number
+  /** The number of the focused turn: the running one, a finished one with a helper at work, or the newest. */
+  n: number
+  symbol: string
+  prompt: string
+  turnTarget: number
+  turnValue: number
+  sigmaValue: number
+  tokensIn: number
+  tokensOut: number
+  cacheRead: number
+  /** A live turn that has no tokens yet. */
+  isEmptyLive: boolean
+  isBump: boolean
+  /** Tokens are streaming and `shimmer` is on. */
+  isFlowing: boolean
+  /** Sizes and colors ease (a moving frame with `grow` on). */
+  useTween: boolean
+  /** The tween keys this frame used, so the others can be forgotten. */
+  keys: Set<string>
+}
+
+function makeCtx(scene: Scene, anim: Anim, settings: Settings, still: boolean): Ctx | null {
+  const { entries, live } = scene
+  const costs = entries.map(x => x.costUsd)
+  const lastN = entries.at(-1)?.n ?? 0
+  const sigmaTarget = scene.ledger ?? costs.reduce((s, x) => s + x, 0)
+  const sigmaValue = still ? sigmaTarget : anim.sigma.shown
+  // The focus: normally set by `syncTargets` / `syncFocus` before the draw; the fallback covers a draw without one.
+  const f = anim.focus
+  const focusN =
+    live !== null
+      ? lastN + 1
+      : f !== null && f.mode !== 'live' && entries.some(x => x.n === f.n)
+        ? f.n
+        : pickFocus(scene, null, anim.tick, 0).n
+  const focused = live !== null ? undefined : entries.find(x => x.n === focusN)
+  if (live === null && focused === undefined) return null
+  const turnTarget = live !== null ? live.costUsd : (focused?.costUsd ?? 0)
+  let tokensIn = 0
+  let tokensOut = 0
+  let cacheRead = 0
+  if (live) {
+    const u = addUsage(live.main, live.agent)
+    tokensIn = u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+    tokensOut = u.output_tokens
+    cacheRead = u.cache_read_input_tokens
+  } else if (focused) {
+    tokensIn = focused.tokensIn
+    tokensOut = focused.tokensOut
+    cacheRead = focused.cacheRead
+  }
+  const isGrowing = live === null && scene.growing.includes(focusN)
+  const isOlder = live === null && focusN !== lastN
+  const at = entries.findIndex(x => x.n === focusN)
+  const prevCost = live !== null ? entries.at(-1)?.costUsd : at > 0 ? entries[at - 1]?.costUsd : undefined
+
+  return {
+    anim,
+    settings,
+    still,
+    entries,
+    live,
+    costs,
+    growing: scene.growing,
+    lastN,
+    isGrowing,
+    isOlder,
+    prevCost,
+    fg: live !== null || isGrowing ? LIVE : DEFAULT,
+    n: focusN,
+    symbol: live ? live.symbol : (focused?.symbol ?? ''),
+    prompt: live ? live.prompt : (focused?.prompt ?? ''),
+    turnTarget,
+    turnValue: still ? turnTarget : anim.turn.shown,
+    sigmaValue,
+    tokensIn,
+    tokensOut,
+    cacheRead,
+    isEmptyLive: live !== null && tokensIn + tokensOut === 0,
+    isBump: settings.effects.reacts && !still && (live !== null || isGrowing) && anim.tick < anim.bumpUntil,
+    isFlowing: settings.effects.shimmer && !still && live !== null && anim.tick < anim.flowUntil,
+    useTween: !still && settings.effects.grow,
+    keys: new Set(),
+  }
+}
+
+/** The number under `key` at this tick: eased toward `target` when the frame eases, else the target itself. */
+function ease(c: Ctx, key: string, target: number): number {
+  if (!c.useTween) return target
+  c.keys.add(key)
+
+  return tweenTo(c.anim, key, target, true)
+}
+
+/** `ease` for a color. */
+function easeColor(c: Ctx, key: string, target: number): number {
+  if (!c.useTween) return target
+  c.keys.add(key)
+
+  return tweenColorTo(c.anim, key, target, true)
+}
+
+/** The number under `key` rolled toward `target` like an odometer (the token counts): with `stock` only, never on a still frame. */
+function roll(c: Ctx, key: string, target: number): number {
+  if (c.still || !c.settings.effects.stock) return target
+  c.keys.add(key)
+
+  return tweenTo(c.anim, key, target, true)
+}
+
+/** True when the finished turn `n` shimmers because a background helper is still adding to it. */
+function growShimmer(c: Ctx, n: number): boolean {
+  return c.settings.effects.shimmer && !c.still && c.growing.includes(n)
+}
+
+/** The money text as cells; digits at or after the odometer's flash point take the flash color. */
+function moneyCells(value: number, odo: Odo, fg: number, c: Ctx): Cell[] {
+  const chars = Array.from(formatCost(value))
+  const out: Cell[] = []
+  const flashing = !c.still && c.anim.tick < odo.flashUntil
+  const flash = odo.flashDir === 'up' ? FLASH_UP : FLASH_DOWN
+  chars.forEach((ch, i) => {
+    out.push({ cp: cp(ch), fg: flashing && i >= odo.flashFrom ? flash : fg, bg: DEFAULT })
+  })
+
+  return out
+}
+
+/** The unit the width budget drops: all the parts of a group go together, so no divider is left dangling. */
+type PartId = 'core' | 'label' | 'cost' | 'delta' | 'tokens' | 'badge'
+/** `cells` is what is drawn (natural width); `reserve` is what the width budget counts, so the visual never changes width. */
+type Part = { group: PartId; cells: Cell[]; reserve: number }
+
+function corePart(c: Ctx): Part {
+  const cells = [
+    ...textCells('Σ ', DEFAULT),
+    ...moneyCells(c.sigmaValue, c.anim.sigma, DEFAULT, c),
+    space(),
+    glyph(GLYPH.sep, SEP),
+    space(),
+  ]
+
+  return { group: 'core', cells, reserve: cells.length }
+}
+
+/** A dim ` │ ` divider that belongs to `group`. */
+function dividerPart(group: PartId): Part {
+  return { group, cells: [space(), glyph(GLYPH.sep, SEP), space()], reserve: 3 }
+}
+
+/** The pulsing live marker; a steady lavender `↻` for a finished turn a helper is still adding to; a dim steady dot otherwise. */
+function markerCells(c: Ctx): Cell[] {
+  if (!c.live) return [c.isGrowing ? glyph(GLYPH.refresh, LIVE) : glyph(GLYPH.live, SEP), space()]
+  const on = !c.settings.effects.reacts || c.still || Math.floor(c.anim.tick / 5) % 2 === 0
+
+  return [glyph(on ? GLYPH.live : GLYPH.liveOff, LIVE), space()]
+}
+
+function labelPart(c: Ctx): Part {
+  // An older focused turn always carries its number: in `symbol` mode it is drawn as `numbered` (`↻ #71 FIX`).
+  const kind = c.settings.display.label === 'symbol' && c.isOlder ? 'numbered' : c.settings.display.label
+  const width = kind === 'symbol' ? 6 : kind === 'prompt' ? 26 : kind === 'numbered' ? 12 : 4
+  const text = cut(labelText({ ...c.settings.display, label: kind }, c.n, c.symbol, c.prompt), width)
+
+  return { group: 'label', cells: [...markerCells(c), ...textCells(text, c.fg)], reserve: 2 + width }
+}
+
+function costPart(c: Ctx): Part {
+  const cells = moneyCells(c.turnValue, c.anim.turn, c.fg, c)
+
+  return { group: 'cost', cells, reserve: Math.max(6, cells.length) }
+}
+
+function deltaFor(c: Ctx): Delta | null {
+  const prev = c.prevCost
+
+  return c.settings.display.change === 'percent'
+    ? formatPercentDelta(c.turnTarget, prev)
+    : formatDelta(c.turnTarget, prev)
+}
+
+/** The change against the turn before: it shows its new value at once, in the color of its sign. */
+function deltaPart(c: Ctx): Part {
+  const d = deltaFor(c)
+
+  return { group: 'delta', cells: d === null ? [] : [space(), ...textCells(d.text, DELTA_COLOR[d.dir])], reserve: 7 }
+}
+
+/** The token counts roll under `stock`; the cached share of the input number slides with `grow`. */
+function tokensPart(c: Ctx): Part {
+  const labeled = c.settings.display.tokens === 'labeled'
+  const shownIn = Math.round(roll(c, `tin:${c.n}`, c.tokensIn))
+  const shownOut = Math.round(roll(c, `tout:${c.n}`, c.tokensOut))
+  const share = ease(c, `cache:${c.n}`, c.tokensIn > 0 ? c.cacheRead / c.tokensIn : 0)
+
+  const showPercent = c.settings.display.cachePercent === 'on'
+
+  // The percent note goes with the group (one drop unit): up to ` (100%c)` (8 cells) or ` (100% cached)` (14 cells) more.
+  return {
+    group: 'tokens',
+    cells: tokenCells(shownIn, shownOut, share, labeled, c.isEmptyLive, showPercent),
+    reserve: (labeled ? 18 : 11) + (showPercent ? (labeled ? 14 : 8) : 0),
+  }
+}
+
+function badgePart(c: Ctx): Part {
+  return { group: 'badge', cells: [space(), space(), ...badgeCells(c.anim, c.still)], reserve: 14 }
+}
+
+// ---- the three visuals --------------------------------------------------------------------------
+
+type Visual = { min: number; max: number; build: (n: number) => Cell[] }
+
+function meterVisual(c: Ctx): Visual {
+  return {
+    min: 8,
+    max: 60,
+    build: B => {
+      const key = `meter:${c.n}`
+      const f = ease(c, key, logShare(c.turnTarget))
+      const isMoving = c.useTween && isTweening(c.anim, key)
+      const fillTarget = c.live !== null || c.isGrowing ? LIVE : rampColor(rampFor(c.turnTarget, c.costs))
+      const fill = easeColor(c, `c:meter:${c.n}`, fillTarget)
+      const bar = meterCells(B, f, fill, isMoving, c.turnTarget > 0)
+      const filled = bar.findIndex(x => x.cp === GLYPH.track)
+      const F = filled < 0 ? B : filled
+      if (c.live !== null ? c.isFlowing : growShimmer(c, c.n)) {
+        for (let i = 0; i < F; i++) {
+          const cell = bar[i]
+          if (cell) bar[i] = { ...cell, fg: lighten(cell.fg, sweepAmount(i, F, c.anim.tick)) }
+        }
+      }
+      if (c.isBump && F > 0) {
+        const tip = bar[F - 1]
+        if (tip) bar[F - 1] = { ...tip, fg: WHITE }
+      }
+
+      return bar
+    },
+  }
+}
+
+function chartVisual(c: Ctx): Visual {
+  return {
+    min: 8,
+    max: 32,
+    build: C => {
+      const k = Math.min(c.costs.length, c.live ? C - 1 : C)
+      // The focused finished turn (a helper still at work) is lavender like a running one; every other bar keeps its ramp color.
+      const slots: { n: number; value: number; color: number; isLive: boolean; isFocus: boolean }[] = c.entries
+        .slice(c.entries.length - k)
+        .map(e => {
+          const isFocus = c.isGrowing && e.n === c.n
+
+          return {
+            n: e.n,
+            value: e.costUsd,
+            color: isFocus ? LIVE : rampColor(rampFor(e.costUsd, c.costs)),
+            isLive: false,
+            isFocus,
+          }
+        })
+      if (c.live) slots.push({ n: c.n, value: c.turnTarget, color: LIVE, isLive: true, isFocus: false })
+      const cells: Cell[] = []
+      for (let i = 0; i < C - slots.length; i++) cells.push(glyph(GLYPH.bars[1] ?? 0x2581, EMPTY_BAR))
+      for (const s of slots) {
+        const r = ease(c, `chart:${s.n}`, logShare(s.value))
+        let fg = easeColor(c, `c:chart:${s.n}`, s.color)
+        if (s.isLive) {
+          if (c.isBump) fg = WHITE
+          else if (c.isFlowing) fg = lighten(fg, pulseAmount(c.anim.tick))
+        } else if (s.isFocus && c.isBump) {
+          fg = WHITE
+        } else if (growShimmer(c, s.n)) {
+          fg = lighten(fg, pulseAmount(c.anim.tick))
+        }
+        const level = s.value <= 0 ? 0 : Math.min(8, Math.max(1, Math.round(r * 8)))
+        cells.push(level === 0 ? glyph(GLYPH.bars[1] ?? 0x2581, EMPTY_BAR) : glyph(GLYPH.bars[level] ?? 0x2588, fg))
+      }
+
+      return cells
+    },
+  }
+}
+
+/** The text of a strip block, or null when none fits: the first candidate that leaves a space on each side. */
+function stripLabel(b: StripBlock, pct: number, labelsOn: boolean): string | null {
+  if (b.kind === 'leaving' || !labelsOn) return null
+  // The live dot belongs to the label part of the row only, never inside a block.
+  const sym = b.symbol
+  const candidates = [`${sym} ${pct}%`, sym]
+
+  return candidates.find(t => b.width >= Array.from(t).length + 2) ?? null
+}
+
+/** The turn numbers whose block is still shrinking out of the strip window (older than `firstN`); settled ones are forgotten. */
+function leavingTurns(c: Ctx, firstN: number): number[] {
+  const out: number[] = []
+  for (const key of Array.from(c.anim.tweens.keys())) {
+    const m = /^s:(\d+)$/.exec(key)
+    const n = m?.[1] === undefined ? Number.NaN : Number(m[1])
+    if (!(n < firstN)) continue
+    const value = tweenTo(c.anim, key, 0, true)
+    if (value < 0.0005 && !isTweening(c.anim, key)) continue
+    c.keys.add(key)
+    out.push(n)
+  }
+
+  return out.sort((a, b) => a - b)
+}
+
+function stripVisual(c: Ctx): Visual {
+  return {
+    min: 10,
+    max: 512,
+    build: S => {
+      // The window: the last `stripTurns` turns, the running one included. When all of them fit with a blank cell
+      // between neighbours, that is how they are drawn; otherwise the blocks touch and each later one starts with a hairline.
+      const K = Math.min(c.settings.stripTurns, c.entries.length + (c.live ? 1 : 0))
+      const gap: 0 | 1 = K * 3 - 1 <= S ? 1 : 0
+      const k = gap === 1 ? K : Math.min(K, S - 1)
+      const finished = c.live ? Math.max(0, k - 1) : k
+      const shownEntries = finished === 0 ? [] : c.entries.slice(-finished)
+      const items: StripItem[] = []
+      if (c.useTween) {
+        for (const n of leavingTurns(c, shownEntries[0]?.n ?? c.lastN + 1)) items.push({ kind: 'leaving', n, symbol: '', value: 0 })
+      }
+      for (const e of shownEntries) items.push({ kind: 'turn', n: e.n, symbol: e.symbol, value: e.costUsd })
+      if (c.live) items.push({ kind: 'live', n: c.n, symbol: c.live.symbol, value: c.turnTarget })
+      const blocks = stripLayout(items, S, (key, target) => ease(c, key, target), gap)
+      const total = blocks.reduce((s, b) => (b.kind === 'leaving' ? s : s + b.value), 0)
+      const cells: Cell[] = []
+      blocks.forEach((b, i) => {
+        if (i > 0 && gap === 1) cells.push(space())
+        const old = b.kind === 'leaving' ? c.entries.find(x => x.n === b.n) : undefined
+        // The focused finished turn (a helper still at work) takes the lavender of the running block.
+        const isFocus = b.kind === 'turn' && c.isGrowing && b.n === c.n
+        const base =
+          b.kind === 'live' || isFocus
+            ? LIVE_FILL
+            : b.kind === 'leaving'
+              ? old === undefined
+                ? FIGURES
+                : rampColor(rampFor(old.costUsd, c.costs))
+              : rampColor(rampFor(b.target, c.costs))
+        let bg = easeColor(c, `c:${b.key}`, base)
+        if ((b.kind === 'live' || isFocus) && c.isBump) bg = LIVE_BUMP
+        const block = blank(b.width, bg)
+        if (b.kind === 'live' ? c.isFlowing : b.kind === 'turn' && growShimmer(c, b.n)) {
+          block.forEach((cell, j) => {
+            cell.bg = lighten(bg, sweepAmount(j, b.width, c.anim.tick))
+          })
+        }
+        const pct = total > 0 ? Math.round((b.value / total) * 100) : 0
+        const label = stripLabel(b, pct, c.settings.stripLabels)
+        if (label !== null) {
+          textCells(' ' + label, DEFAULT).forEach((cell, j) => {
+            const target = block[j]
+            if (target) block[j] = { cp: cell.cp, fg: isBright(target.bg) ? DARK : WHITE, bg: target.bg }
+          })
+        }
+        // Touching blocks: a thin dark line at the left edge of every block after the first, in place of its leading space.
+        const first = block[0]
+        if (gap === 0 && i > 0 && first !== undefined) block[0] = glyph(GLYPH.hairline, DARK, first.bg)
+        cells.push(...block)
+      })
+
+      return cells.length >= S ? cells.slice(0, S) : [...cells, ...blank(S - cells.length)]
+    },
+  }
+}
+
+// ---- the row ------------------------------------------------------------------------------------
+
+/** Dropped (whole groups) in this order when the row is too narrow, the same for every style; then the left core stands alone. */
+const DROP_ORDER: PartId[] = ['badge', 'tokens', 'delta', 'label']
+
+type Seq = (Part | 'visual')[]
+
+/**
+ * The parts in drawing order, the same for every style, with a dim divider after the label, after the visual and after the change:
+ * `core, label, |, visual, |, cost, delta, |, tokens, badge`. The divider after the label goes with the label, so a dropped
+ * label leaves `core, visual, |, cost ...` and never a doubled or dangling bar.
+ */
+function sequence(c: Ctx): { seq: Seq; visual: Visual } {
+  const { style, effects } = c.settings
+  const delta: Part[] = c.settings.display.change === 'off' ? [] : [deltaPart(c)]
+  const badge: Part[] = effects.reacts || effects.celebrate ? [badgePart(c)] : []
+  const figures: Part[] = [costPart(c), ...delta, dividerPart('tokens'), tokensPart(c), ...badge]
+
+  return {
+    seq: [corePart(c), labelPart(c), dividerPart('label'), 'visual', dividerPart('core'), ...figures],
+    visual: style === 'meter' ? meterVisual(c) : style === 'chart' ? chartVisual(c) : stripVisual(c),
+  }
+}
+
+/**
+ * The row as exactly `cols` cells. `still` uses the targets and draws no flash, badge, shimmer, bump, rolling or easing:
+ * for the desktop and the static fallback.
+ */
+export function composeRow(scene: Scene, anim: Anim, settings: Settings, cols: number, still: boolean): { cells: Cell[] } {
+  const c = makeCtx(scene, anim, settings, still)
+  const finish = (cells: Cell[]): Cell[] => (cells.length >= cols ? cells.slice(0, cols) : [...cells, ...blank(cols - cells.length)])
+  if (c === null) {
+    const sigma = scene.ledger ?? scene.entries.reduce((s, x) => s + x.costUsd, 0)
+    const bare: Ctx = {
+      anim, settings, still, entries: [], live: null, costs: [], growing: [], lastN: 0, isGrowing: false,
+      isOlder: false, prevCost: undefined, fg: DEFAULT,
+      n: 0, symbol: '', prompt: '', turnTarget: 0, turnValue: 0, sigmaValue: still ? sigma : anim.sigma.shown,
+      tokensIn: 0, tokensOut: 0, cacheRead: 0, isEmptyLive: false, isBump: false, isFlowing: false,
+      useTween: false, keys: new Set(),
+    }
+
+    return { cells: finish(corePart(bare).cells) }
+  }
+
+  const { seq, visual } = sequence(c)
+  const order = DROP_ORDER.filter(id => seq.some(p => p !== 'visual' && p.group === id))
+  const dropped = new Set<PartId>()
+  for (;;) {
+    const kept = seq.filter((p): p is Part => p !== 'visual' && !dropped.has(p.group))
+    const fixed = kept.reduce((s, p) => s + p.reserve, 0)
+    const n = Math.min(visual.max, cols - fixed)
+    if (n >= visual.min) {
+      const built = visual.build(n)
+      const cells: Cell[] = []
+      for (const p of seq) {
+        if (p === 'visual') cells.push(...built)
+        else if (!dropped.has(p.group)) cells.push(...p.cells)
+      }
+      if (!c.still) pruneTweens(anim, c.keys)
+
+      return { cells: finish(cells) }
+    }
+    const next = order.shift()
+    if (next === undefined) return { cells: finish(corePart(c).cells) }
+    dropped.add(next)
+  }
+}
