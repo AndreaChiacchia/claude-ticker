@@ -473,7 +473,7 @@ export const register: Register = (on, options) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
-  // Which turn launched a background agent: the live turn for a spawn from the main loop, the parent's turn for a nested one.
+  // Which turn launched a background agent: the live turn for a spawn from the main loop, the parent's turn for a nested one. A resumed agent (a message wakes it, under the same id) keeps the turn that launched it.
   on('agent.spawn', async ($, e, next) => {
     const r = await next(e)
     const agentId = r.agentId
@@ -486,7 +486,7 @@ export const register: Register = (on, options) => {
       }
       if (owner !== undefined) {
         const n = owner
-        await update($, owners, old => ({ ...old, [agentId]: n }))
+        await update($, owners, old => (old[agentId] === undefined ? { ...old, [agentId]: n } : old))
       }
     }
 

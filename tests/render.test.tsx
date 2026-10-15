@@ -783,6 +783,43 @@ async function secondTurn($: Engine, w: World, ui: Slot) {
   return { running: rowText(await drawing(ui)) }
 }
 
+/** Turn 1 runs agent ag1 (one response, to $0.25) and ends at $0.375; turn 2 answers (its own response, to $0.50) and a message resumes ag1, whose start is heard before (startFirst) or after its spawn; ag1 answers once (to $1.00). */
+async function resumedHelper($: Engine, w: World, startFirst: boolean) {
+  await $.turn.start({ text: 'dig deep', turnId: 't1' } as never)
+  w.state.nextAgentId = 'ag1'
+  await $.agent.spawn({ prompt: 'dig' } as never)
+  await $.turn.start({ text: 'dig', turnId: 'h1', agentId: 'ag1' } as never)
+  w.state.ledgerOnStep = 0.25
+  await step($, 'h1', 'ag1')
+  await $.turn.complete({
+    answer: '',
+    durationMs: 10,
+    isAborted: false,
+    turnId: 'h1',
+    agentId: 'ag1',
+    reason: 'answer',
+    usage: { model: 'claude-opus-5-5', ...usage() },
+  } as never)
+  w.state.ledgerOnStep = null
+  w.state.ledger = 0.375
+  await finish($, 't1', usage())
+  await $.turn.start({ text: 'next thing', turnId: 't2' } as never)
+  w.state.ledgerOnStep = 0.5
+  await step($, 't2')
+  const start = () => $.turn.start({ text: 'go on', turnId: 'h2', agentId: 'ag1' } as never)
+  const resume = () => $.agent.spawn({ prompt: 'go on', resume: { agentId: 'ag1' } } as never)
+  if (startFirst) {
+    await start()
+    await resume()
+  } else {
+    await resume()
+    await start()
+  }
+  w.state.step = usage()
+  w.state.ledgerOnStep = 1.0
+  await step($, 'h2', 'ag1')
+}
+
 test('the row follows the active turn', { options: EFFECTS_OFF }, async ($, on) => {
   const w = world(on)
   const ui = await mount($)
@@ -894,6 +931,76 @@ test('a helper step during a newer live turn goes to its own turn', { options: E
   expect(entries.find(e => e.n === 1)?.costUsd).toBe(0.875)
   expect(entries.find(e => e.n === 2)?.costUsd).toBe(0.125)
 })
+
+test(
+  'a helper resumed by a message in a later turn keeps crediting the turn that launched it',
+  { options: EFFECTS_OFF },
+  async ($, on) => {
+    const w = world(on)
+    const ui = await mount($)
+    const entries = () =>
+      (w.store.get('session:sess-1') as { entries: { n: number; costUsd: number; tokensIn: number; agents: number }[] }).entries
+    await resumedHelper($, w, true)
+    expect(entries().find(e => e.n === 1)?.costUsd).toBe(0.875)
+    expect(entries().find(e => e.n === 1)?.tokensIn).toBe(2000)
+    const running = rowText(await drawing(ui))
+    expect(running).toContain('● NEXT │')
+    expect(running).toContain('│ $0.13 ▼0.75 │')
+
+    w.state.ledgerOnStep = null
+    w.state.ledger = 1.0
+    await finish($, 't2', usage())
+    expect(entries().find(e => e.n === 2)?.costUsd).toBe(0.125)
+    expect(entries().find(e => e.n === 2)?.tokensIn).toBe(1000)
+    expect(entries().find(e => e.n === 2)?.agents).toBe(0)
+    const back = rowText(await drawing(ui))
+    expect(back).toContain('↻ #1 DIG │')
+    expect(back).toContain('│ $0.88 │')
+
+    w.state.ledgerOnStep = 1.25
+    await step($, 'h2', 'ag1')
+    expect(entries().find(e => e.n === 1)?.costUsd).toBe(1.125)
+    expect(entries().find(e => e.n === 2)?.costUsd).toBe(0.125)
+    const grown = rowText(await drawing(ui))
+    expect(grown).toContain('↻ #1 DIG │')
+    expect(grown).toContain('│ $1.13 │')
+
+    await $.turn.complete({
+      answer: '',
+      durationMs: 10,
+      isAborted: false,
+      turnId: 'h2',
+      agentId: 'ag1',
+      reason: 'answer',
+      usage: { model: 'claude-opus-5-5', ...usage() },
+    } as never)
+    const done = rowText(await drawing(ui))
+    expect(done).toContain('● NEXT │')
+    expect(done).toContain('│ $0.13 ▼1.00 │')
+    expect(done).not.toContain('↻')
+    expect(entries().find(e => e.n === 1)?.agents).toBe(1)
+  },
+)
+
+test(
+  'a resumed helper whose spawn is heard before its start credits the turn that launched it',
+  { options: EFFECTS_OFF },
+  async ($, on) => {
+    const w = world(on)
+    const ui = await mount($)
+    const entries = () =>
+      (w.store.get('session:sess-1') as { entries: { n: number; costUsd: number; tokensIn: number; agents: number }[] }).entries
+    await resumedHelper($, w, false)
+    expect(entries().find(e => e.n === 1)?.costUsd).toBe(0.875)
+    expect(rowText(await drawing(ui))).toContain('│ $0.13 ▼0.75 │')
+
+    w.state.ledgerOnStep = null
+    w.state.ledger = 1.0
+    await finish($, 't2', usage())
+    expect(entries().find(e => e.n === 2)?.costUsd).toBe(0.125)
+    expect(rowText(await drawing(ui))).toContain('↻ #1 DIG │')
+  },
+)
 
 test('an unknown agent counts in Σ only', { options: EFFECTS_OFF }, async ($, on) => {
   const w = world(on)
