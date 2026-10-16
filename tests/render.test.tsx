@@ -737,8 +737,8 @@ test('a background helper keeps crediting the turn that launched it', { options:
   expect(row).toContain('2K↓ 200↑')
   expect(row).toContain('Σ $0.63')
   // The row follows the turn the helper works on: the newest turn, so its marker has no number.
-  expect(row).toContain('↻ DIG ·')
-  expect(text(await pane.drawn())).toContain('↻')
+  expect(row).toContain('◐ DIG ·')
+  expect(text(await pane.drawn())).toContain('◐')
 
   w.state.ledgerOnStep = 1.125
   await step($, 'h1', 'ag1')
@@ -753,10 +753,10 @@ test('a background helper keeps crediting the turn that launched it', { options:
     reason: 'answer',
     usage: { model: 'claude-opus-5-5', ...usage() },
   } as never)
-  expect(text(await pane.drawn())).not.toContain('↻')
+  expect(text(await pane.drawn())).not.toContain('◐')
   const finished = rowText(await drawing(ui))
   expect(finished).toContain('● DIG ·')
-  expect(finished).not.toContain('↻')
+  expect(finished).not.toContain('◐')
   const saved = w.store.get('records') as { costUsd: number; n: number }[]
   expect(saved.filter(r => r.n === 1).length).toBe(1)
   expect(saved.find(r => r.n === 1)?.costUsd).toBe(1.125)
@@ -841,14 +841,14 @@ test('the row follows the active turn', { options: EFFECTS_OFF }, async ($, on) 
   await helperWorking($, w)
   // The helper's turn is the only one: its marker, no number.
   const helper = rowText(await drawing(ui))
-  expect(helper).toContain('↻ DIG ·')
+  expect(helper).toContain('◐ DIG ·')
   expect(helper).toContain('· $0.63 ·')
 
   // A newer turn runs: it has the row.
   const { running } = await secondTurn($, w, ui)
   expect(running).toContain('● NEXT ·')
   expect(running).toContain('· $0.13 ▼0.75 ·')
-  expect(running).not.toContain('↻')
+  expect(running).not.toContain('◐')
 
   // It ends: the row goes back to turn 1 while its helper still works, lavender, with its number.
   w.state.ledgerOnStep = null
@@ -856,14 +856,14 @@ test('the row follows the active turn', { options: EFFECTS_OFF }, async ($, on) 
   await finish($, 't2', usage())
   const back = rowCells(await drawing(ui))
   const backText = cellText(back)
-  expect(backText).toContain('↻ #1 DIG ·')
+  expect(backText).toContain('◐ #1 DIG ·')
   expect(backText).toContain('· $0.88 ·')
-  expect(back[backText.indexOf('↻')]?.fg).toBe(LIVE)
+  expect(back[backText.indexOf('◐')]?.fg).toBe(LIVE)
 
   w.state.ledgerOnStep = 1.25
   await step($, 'h1', 'ag1')
   const grown = rowText(await drawing(ui))
-  expect(grown).toContain('↻ #1 DIG ·')
+  expect(grown).toContain('◐ #1 DIG ·')
   expect(grown).toContain('· $1.13 ·')
 
   // The helper ends: the row settles on the newest turn.
@@ -871,7 +871,7 @@ test('the row follows the active turn', { options: EFFECTS_OFF }, async ($, on) 
   const done = rowText(await drawing(ui))
   expect(done).toContain('● NEXT ·')
   expect(done).toContain('· $0.13 ▼1.00 ·')
-  expect(done).not.toContain('↻')
+  expect(done).not.toContain('◐')
 })
 
 test(
@@ -889,11 +889,11 @@ test(
     // Right after it ends, turn 2 keeps the row with its final figures.
     const held = rowText(await drawing(ui))
     expect(held).toContain('● NEXT ·')
-    expect(held).not.toContain('↻')
+    expect(held).not.toContain('◐')
     await w.clock.advance(1000)
     expect(blitText(w.blits.at(-1))).toContain('● NEXT ·')
     await w.clock.advance(1500)
-    expect(blitText(w.blits.at(-1))).toContain('↻ #1 DIG ·')
+    expect(blitText(w.blits.at(-1))).toContain('◐ #1 DIG ·')
     expect(blitText(w.blits.at(-1))).toContain('· $0.88 ·')
 
     // The helper ends: turn 1 keeps the row 2 s with its final figures, then the newest turn comes back.
@@ -916,11 +916,11 @@ test('the desktop follows the active turn without a hold', async ($, on) => {
   const ui = await mount($, desktop)
   const shown = await drawing(ui)
   expect(raster(shown)).toBeUndefined()
-  expect(text(shown)).toContain('↻ #1 DIG')
+  expect(text(shown)).toContain('◐ #1 DIG')
   await helperDone($)
   const after = text(await drawing(ui))
   expect(after).toContain('● NEXT')
-  expect(after).not.toContain('↻')
+  expect(after).not.toContain('◐')
 })
 
 test('a helper step during a newer live turn goes to its own turn', { options: EFFECTS_OFF }, async ($, on) => {
@@ -969,7 +969,7 @@ test(
     expect(entries().find(e => e.n === 2)?.tokensIn).toBe(1000)
     expect(entries().find(e => e.n === 2)?.agents).toBe(0)
     const back = rowText(await drawing(ui))
-    expect(back).toContain('↻ #1 DIG ·')
+    expect(back).toContain('◐ #1 DIG ·')
     expect(back).toContain('· $0.88 ·')
 
     w.state.ledgerOnStep = 1.25
@@ -977,7 +977,7 @@ test(
     expect(entries().find(e => e.n === 1)?.costUsd).toBe(1.125)
     expect(entries().find(e => e.n === 2)?.costUsd).toBe(0.125)
     const grown = rowText(await drawing(ui))
-    expect(grown).toContain('↻ #1 DIG ·')
+    expect(grown).toContain('◐ #1 DIG ·')
     expect(grown).toContain('· $1.13 ·')
 
     await $.turn.complete({
@@ -992,7 +992,7 @@ test(
     const done = rowText(await drawing(ui))
     expect(done).toContain('● NEXT ·')
     expect(done).toContain('· $0.13 ▼1.00 ·')
-    expect(done).not.toContain('↻')
+    expect(done).not.toContain('◐')
     expect(entries().find(e => e.n === 1)?.agents).toBe(1)
   },
 )
@@ -1013,7 +1013,7 @@ test(
     w.state.ledger = 1.0
     await finish($, 't2', usage())
     expect(entries().find(e => e.n === 2)?.costUsd).toBe(0.125)
-    expect(rowText(await drawing(ui))).toContain('↻ #1 DIG ·')
+    expect(rowText(await drawing(ui))).toContain('◐ #1 DIG ·')
   },
 )
 
@@ -1139,12 +1139,12 @@ test('a helper whose start was heard before its spawn was recorded still grows i
   await finish($, 't1', usage())
   w.state.ledgerOnStep = 0.625
   await step($, 'h1', 'ag1')
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
-  expect(text(await pane.drawn())).toContain('↻')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
+  expect(text(await pane.drawn())).toContain('◐')
 
   await helperDone($)
   expect(rowText(await drawing(ui))).toContain('● DIG')
-  expect(text(await pane.drawn())).not.toContain('↻')
+  expect(text(await pane.drawn())).not.toContain('◐')
   // Nothing is left to move: the timer stops.
   await w.clock.advance(4000)
   const settled = w.blits.length
@@ -1159,36 +1159,36 @@ test('the open runs live in session state: session.start keeps a running helper 
   const ui = await mount($)
   const pane = await mount($, PANE)
   await helperWorking($, w)
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
-  expect(text(await pane.drawn())).toContain('↻')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
+  expect(text(await pane.drawn())).toContain('◐')
 
   // The agent still lists as running: its run in state is kept.
   await $.session.start(SESSION_START)
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
 
   // The agent ended while this module did not hear it: the run is removed and `growing` follows.
   w.state.agents = [{ id: 'ag1', status: 'completed' }]
   await $.session.start(SESSION_START)
   const closed = rowText(await drawing(ui))
   expect(closed).toContain('● DIG')
-  expect(closed).not.toContain('↻')
-  expect(text(await pane.drawn())).not.toContain('↻')
+  expect(closed).not.toContain('◐')
+  expect(text(await pane.drawn())).not.toContain('◐')
 
   // The helper answers again: it re-joins through the credit path.
   w.state.ledgerOnStep = 0.875
   await step($, 'h1', 'ag1')
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
   await helperDone($)
   const done = rowText(await drawing(ui))
   expect(done).toContain('● DIG')
-  expect(done).not.toContain('↻')
+  expect(done).not.toContain('◐')
 
   // A closed run is not reopened by a later listing.
   w.state.agents = [{ id: 'ag1', status: 'running' }]
   await $.session.start(SESSION_START)
   const after = rowText(await drawing(ui))
   expect(after).toContain('● DIG')
-  expect(after).not.toContain('↻')
+  expect(after).not.toContain('◐')
 })
 
 test('an agent list that fails prunes nothing', { options: EFFECTS_OFF }, async ($, on) => {
@@ -1198,18 +1198,18 @@ test('an agent list that fails prunes nothing', { options: EFFECTS_OFF }, async 
   w.state.agentsFail = true
   w.state.agents = []
   await $.session.start(SESSION_START)
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
 })
 
 test('session.start keeps the turn an open helper run still holds', { options: EFFECTS_OFF }, async ($, on) => {
   const w = world(on)
   const ui = await mount($)
   await helperWorking($, w)
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
   await $.session.start({ cwd: '/x', surface: 'terminal', isInteractive: true } as never)
-  expect(rowText(await drawing(ui))).toContain('↻ DIG')
+  expect(rowText(await drawing(ui))).toContain('◐ DIG')
   await helperDone($)
-  expect(rowText(await drawing(ui))).not.toContain('↻')
+  expect(rowText(await drawing(ui))).not.toContain('◐')
 })
 
 test('/ticker clear keeps the running turn its own subagent', { options: EFFECTS_OFF }, async ($, on) => {
@@ -1255,7 +1255,7 @@ test('/ticker clear: a helper of a removed turn counts in Σ only, not in a new 
   expect(entries.map(e => e.n)).toEqual([1, 2])
   expect(entries[1]?.costUsd).toBe(0.125)
   expect(entries[1]?.agents).toBe(0)
-  expect(rowText(await drawing(ui))).not.toContain('↻')
+  expect(rowText(await drawing(ui))).not.toContain('◐')
   expect(text(await pane.drawn())).toContain('Outside listed turns: $1.25')
 })
 

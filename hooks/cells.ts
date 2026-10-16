@@ -85,8 +85,10 @@ export const GLYPH = {
   bang: 0x203c,
   star1: 0x2726,
   star2: 0x2727,
-  /** The marker of a finished turn a background helper is still adding to. */
-  refresh: 0x21bb,
+  /** The marker of a finished turn a background helper is still adding to: claudecharter's agent spinner. */
+  helperSpin: [0x25d0, 0x25d3, 0x25d1, 0x25d2] as readonly number[],
+  /** The helper marker when nothing moves. */
+  helperStill: 0x25d0,
 }
 
 /** `#rrggbb` for Text; undefined for the terminal default. */

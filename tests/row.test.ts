@@ -674,11 +674,29 @@ test('a live turn with no usage yet reads 0↓ 0↑ in dim gray', () => {
 test('no growing note in the badge spot: the row shows the turn itself', () => {
   const options = { stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
   const growingCells = compose(entriesOf([0.625, 0.125]), options, 100, { growing: [1] }).cells
-  expect(text(growingCells)).toContain('↻ #1 EXPLAI ·')
-  expect(text(growingCells)).not.toContain('↻#')
-  expect(growingCells.filter(c => c.cp === 0x21bb).length).toBe(1)
+  expect(text(growingCells)).toContain('◐ #1 EXPLAI ·')
+  expect(text(growingCells)).not.toContain('◐#')
+  expect(growingCells.filter(c => c.cp === 0x25d0).length).toBe(1)
   const idleCells = compose(entriesOf([0.625, 0.125]), options, 100, { growing: [] }).cells
-  expect(idleCells.some(c => c.cp === 0x21bb)).toBe(false)
+  expect(idleCells.some(c => c.cp === 0x25d0)).toBe(false)
+})
+
+test('the helper marker spins ◐ ◓ ◑ ◒ every 2 frames with effects, and stays ◐ without', () => {
+  const scene: Scene = { entries: entriesOf([0.625, 0.125]), live: null, ledger: null, growing: [1] }
+  const settings = normalizeSettings({})
+  const anim = createAnim()
+  syncTargets(anim, scene, settings, 's')
+  const marks: number[] = []
+  for (const tick of [0, 2, 4, 6, 8]) {
+    anim.tick = tick
+    const cells = composeRow(scene, anim, settings, 100, false).cells
+    marks.push(cells.find(c => [0x25d0, 0x25d3, 0x25d1, 0x25d2].includes(c.cp))?.cp ?? 0)
+  }
+  expect(marks).toEqual([0x25d0, 0x25d3, 0x25d1, 0x25d2, 0x25d0])
+  anim.tick = 2
+  expect(composeRow(scene, anim, settings, 100, true).cells.some(c => c.cp === 0x25d3)).toBe(false)
+  const off = normalizeSettings(EFFECTS_OFF)
+  expect(composeRow(scene, anim, off, 100, false).cells.some(c => c.cp === 0x25d0 && c.fg === LIVE)).toBe(true)
 })
 
 // ---- v7: the row follows the active turn -----------------------------------------------------------
@@ -762,9 +780,9 @@ test('the row shows the older turn a helper is still working on', () => {
 
   const older = row([2])
   const olderText = text(older)
-  expect(olderText.startsWith('Σ $1.05 · ↻ #2 FIX · █')).toBe(true)
+  expect(olderText.startsWith('Σ $1.05 · ◐ #2 FIX · █')).toBe(true)
   expect(olderText).toContain('░ · $0.80 ▲0.60 · 312K↓ 2.1K↑')
-  expect(older[10]?.cp).toBe(0x21bb)
+  expect(older[10]?.cp).toBe(0x25d0)
   expect(older[10]?.fg).toBe(LIVE)
   expect(older.slice(12, 18).every(c => c.fg === LIVE)).toBe(true)
   const cost = olderText.indexOf('$0.80')
@@ -781,16 +799,16 @@ test('the row shows the older turn a helper is still working on', () => {
   const restAt = rest.findIndex(c => c.cp === 0x2588)
   expect(rest.slice(restAt, restAt + 17).every(c => c.cp === 0x2588 && c.fg === FIGURES)).toBe(true)
   expect(rest.slice(restAt + 17, restAt + 49).every(c => c.cp === 0x2591)).toBe(true)
-  expect(rest.some(c => c.cp === 0x21bb)).toBe(false)
+  expect(rest.some(c => c.cp === 0x25d0)).toBe(false)
 
   // The newest turn growing: the marker, but no number.
   const newest = row([3])
-  expect(text(newest).startsWith('Σ $1.05 · ↻ ALPHA · █')).toBe(true)
+  expect(text(newest).startsWith('Σ $1.05 · ◐ ALPHA · █')).toBe(true)
   const newestAt = newest.findIndex(c => c.cp === 0x2588)
   expect(newest.slice(newestAt, newestAt + 17).every(c => c.cp === 0x2588 && c.fg === LIVE)).toBe(true)
 
-  expect(text(row([2], { ...EFFECTS_OFF, label: 'prompt' }))).toContain('↻ #2 "fix the login bug" ·')
-  expect(text(row([2], { ...EFFECTS_OFF, label: 'number' }))).toContain('↻ #2 ·')
+  expect(text(row([2], { ...EFFECTS_OFF, label: 'prompt' }))).toContain('◐ #2 "fix the login bug" ·')
+  expect(text(row([2], { ...EFFECTS_OFF, label: 'number' }))).toContain('◐ #2 ·')
 })
 
 test('chart: the focused older bar is lavender', () => {
@@ -827,7 +845,7 @@ test('strip: the focused older block is lavender', () => {
   expect(far.slice(firstRun.start, firstRun.end + 1).every(c => c.bg === LIVE_FILL)).toBe(true)
   expect(far.filter(c => c.bg === LIVE_FILL).length).toBe(firstRun.end - firstRun.start + 1)
   expect(text(far)).not.toContain('ALPHA')
-  expect(text(far)).toContain('↻ #1 EXPLAI · ')
+  expect(text(far)).toContain('◐ #1 EXPLAI · ')
   expect(text(far)).toContain('· $0.10 · 312K↓')
 })
 

@@ -353,7 +353,7 @@ function anyEffect(): boolean {
 function needsTimer(): boolean {
   if (band === null || scene === null || isStaticFallback || !anyEffect()) return false
   const motion = scene.live !== null && (settings.effects.reacts || settings.effects.shimmer)
-  const helpers = scene.growing.length > 0 && settings.effects.shimmer
+  const helpers = scene.growing.length > 0 && (settings.effects.reacts || settings.effects.shimmer)
 
   // A held switch of the focus is pending: the timer runs until it has happened.
   return motion || helpers || !isSettled(anim) || !isFocusSettled(anim, scene)
@@ -874,7 +874,7 @@ export const register: Register = (on, options) => {
           const swatch = rampColor(rampFor(x.costUsd, costs))
           const delta = formatDelta(x.costUsd, prev?.costUsd)
           const deltaColor = delta === null ? DEFAULT : delta.dir === 'up' ? UP : delta.dir === 'down' ? DOWN : FLAT
-          const number = String(x.n) + (gr.includes(x.n) ? '↻' : '')
+          const number = String(x.n) + (gr.includes(x.n) ? '◐' : '')
 
           return (
             <Text wrap="truncate-end">
