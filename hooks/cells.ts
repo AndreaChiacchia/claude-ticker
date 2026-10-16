@@ -78,7 +78,6 @@ export const GLYPH = {
   sigma: 0x03a3,
   sep: 0x00b7,
   live: 0x25cf,
-  liveOff: 0x25cb,
   /** A thin line at the left edge of a cell: the boundary between strip blocks that touch. */
   hairline: 0x258f,
   toolL: 0x2039,

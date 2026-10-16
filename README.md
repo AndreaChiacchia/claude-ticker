@@ -37,7 +37,7 @@ The three rows at the bottom are the same session in the three styles: the meter
   - `312K↓` is the input tokens, cache reads and writes included. `2.1K↑` is the output tokens. A turn starts at `0↓ 0↑` in dim gray until usage arrives.
   - The token figures are plain gray, with no background. The share of the input served from the prompt cache is in the `/ticker` table, and beside the input figure as `(94%c)` with the setting `cachePercent`.
 - **The name of a turn:** the first word of your prompt that says something, in capitals and cut to 6 letters (`please refactor the parser` is `REFACT`). A slash command shows as `/IWO`.
-- **A live entry:** the turn that is running starts with a pulsing `●` and counts up as it goes, in lavender.
+- **A live entry:** the turn that is running starts with a `●` that dims and brightens and counts up as it goes, in lavender.
 - **Σ at the left edge:** the session total, exactly as `/cost` shows it.
 - **A teal scale:** the meter bar, the chart bars and the strip blocks run from dim teal (a cheap turn for this session) to bright teal (a pricey one), measured against the session median from the fourth turn on (gray before). Names and costs of finished turns keep the default text color. The running turn is lavender. `▲` is red and `▼` green, as before.
 - **Smooth changes:** bars, chart columns and strip blocks ease to their new size and color, and the `(94%c)` cache percent to its new value, in about 0.4 s (setting `grow`).

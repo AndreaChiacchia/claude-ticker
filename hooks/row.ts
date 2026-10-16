@@ -25,6 +25,7 @@ import {
   isBright,
   labelText,
   lighten,
+  mixColor,
   normalizeDisplay,
   rampColor,
   safeCp,
@@ -499,12 +500,12 @@ function dividerPart(group: PartId): Part {
   return { group, cells: [space(), glyph(GLYPH.sep, DIVIDER), space()], reserve: 3 }
 }
 
-/** The pulsing live marker; a steady lavender `↻` for a finished turn a helper is still adding to; a dim steady dot otherwise. */
+/** The live marker, pulsing: always `●`, dimming half-way toward the empty-track gray; a steady lavender `↻` for a finished turn a helper is still adding to; a dim steady dot otherwise. */
 function markerCells(c: Ctx): Cell[] {
   if (!c.live) return [c.isGrowing ? glyph(GLYPH.refresh, LIVE) : glyph(GLYPH.live, SEP), space()]
   const on = !c.settings.effects.reacts || c.still || Math.floor(c.anim.tick / 5) % 2 === 0
 
-  return [glyph(on ? GLYPH.live : GLYPH.liveOff, LIVE), space()]
+  return [glyph(GLYPH.live, on ? LIVE : mixColor(LIVE, SEP, 0.5)), space()]
 }
 
 function labelPart(c: Ctx): Part {
