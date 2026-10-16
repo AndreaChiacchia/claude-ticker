@@ -40,7 +40,7 @@ import {
 } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { formatCost, formatTokens, logShare } from '../hooks/format'
-import { composeRow, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells } from '../hooks/row'
+import { composeRow, meterCells, normalizeSettings, stripGap, stripLayout, stripWidths, tokenCells } from '../hooks/row'
 import type { StripItem, TokenFigure } from '../hooks/row'
 
 const EFFECTS_OFF = { reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
@@ -1120,6 +1120,27 @@ test('each strip count: blank cells between blocks while they fit, hairlines whe
   expect(widths.length).toBe(24)
   expect(widths.every(w => w >= 1)).toBe(true)
   expect(widths.reduce((s, w) => s + w, 0)).toBe(59)
+})
+
+test('stripGap: blanks between blocks only with half a cell per block to spare past the minimums', () => {
+  // 8 blocks: 23 cells is just the minimums with blanks, 27 the first with room to spare.
+  expect(stripGap(8, 23)).toBe(0)
+  expect(stripGap(8, 26)).toBe(0)
+  expect(stripGap(8, 27)).toBe(1)
+  expect([8, 12, 16].map(count => stripGap(count, 59))).toEqual([1, 1, 1])
+  expect(stripGap(24, 59)).toBe(0)
+})
+
+test('8 turns in a tight strip: the blocks touch so a costly turn stays wider than the cheap ones', () => {
+  const turns = [0.4, 0.3, 0.5, 0.35, 0.3, 0.45, 0.34, 6.04].map((costUsd, i) => entry({ n: i + 1, symbol: 'TURN', costUsd }))
+  const { cells } = compose(turns, { ...EFFECTS_OFF, style: 'strip', stripTurns: '8', stripLabels: 'off' }, 74, { ledger: 8.68 })
+  expect(cells.length).toBe(74)
+  // The label ● TURN (6 cells) and its divider come first: the 23-cell strip is cells 19 to 41, one touching run.
+  expect(cells.slice(19, 42).every(c => c.bg !== DEFAULT)).toBe(true)
+  const hairlines = cells.map((c, i) => (c.cp === 0x258f ? i : -1)).filter(i => i >= 0)
+  expect(hairlines.length).toBe(7)
+  // The costly turn takes 16 of the 23 cells; with blanks between blocks all eight would be 2 cells.
+  expect(42 - (hairlines.at(-1) ?? 0)).toBe(16)
 })
 
 test('24 turns at about 110 columns with all effects on: 24 touching blocks, also when the running turn ends', () => {

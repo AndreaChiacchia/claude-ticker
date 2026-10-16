@@ -150,6 +150,15 @@ export type StripBlock = {
   width: number
 }
 
+/**
+ * 1 (a blank cell between neighbours) when `count` blocks fit in `S` cells with room to spare, else 0 (the blocks touch).
+ * The spare is half a cell per block past the minimums: without it every block sits at its minimum and a costly turn
+ * looks as wide as a cheap one.
+ */
+export function stripGap(count: number, S: number): 0 | 1 {
+  return count * 3 - 1 + Math.ceil(count / 2) <= S ? 1 : 0
+}
+
 /** The least a block is wide: `gap` 1 (blank cell between blocks) live 3, turn 2; `gap` 0 (blocks touch) live 2, turn 1. */
 const minWidth = (b: StripBlock, gap: 0 | 1): number =>
   b.kind === 'live' ? MIN_LIVE - (1 - gap) : b.kind === 'turn' ? MIN_TURN - (1 - gap) : MIN_LEAVING
@@ -606,9 +615,10 @@ function stripVisual(c: Ctx): Visual {
     max: 512,
     build: S => {
       // The window: the last `stripTurns` turns, the running one included. When all of them fit with a blank cell
-      // between neighbours, that is how they are drawn; otherwise the blocks touch and each later one starts with a hairline.
+      // between neighbours and room left to show their sizes, that is how they are drawn; otherwise the blocks touch
+      // and each later one starts with a hairline.
       const K = Math.min(c.settings.stripTurns, c.entries.length + (c.live ? 1 : 0))
-      const gap: 0 | 1 = K * 3 - 1 <= S ? 1 : 0
+      const gap = stripGap(K, S)
       const k = gap === 1 ? K : Math.min(K, S - 1)
       const finished = c.live ? Math.max(0, k - 1) : k
       const shownEntries = finished === 0 ? [] : c.entries.slice(-finished)
