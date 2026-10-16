@@ -35,30 +35,38 @@ import type { Delta } from './format'
 
 export type Style = 'meter' | 'chart' | 'strip'
 export type Effects = { reacts: boolean; stock: boolean; celebrate: boolean; shimmer: boolean; grow: boolean }
-export type StripTurns = 8 | 12 | 16 | 24
 export type Settings = {
   style: Style
   effects: Effects
   display: Display
   stripLabels: boolean
-  stripTurns: StripTurns
+  /** How many recent turns the strip shows, the running one included: 4 to 24. */
+  stripTurns: number
+  /** How many bars the chart has: 4 to 32. */
+  chartBars: number
   gapAbove: boolean
 }
 
 const STYLES: readonly Style[] = ['meter', 'chart', 'strip']
-const STRIP_TURN_CHOICES: readonly StripTurns[] = [8, 12, 16, 24]
+
+/** `value` as a whole number from `min` to `max`, else `fallback`. */
+const countIn = (value: unknown, min: number, max: number, fallback: number): number => {
+  const n = Number(value)
+
+  return Number.isInteger(n) && n >= min && n <= max ? n : fallback
+}
 
 /** The settings, each falling back to its default when unknown. */
 export function normalizeSettings(options: Record<string, unknown>): Settings {
   const on = (key: string): boolean => options[key] !== 'off'
-  const turns = Number(options.stripTurns)
 
   return {
     style: STYLES.find(s => s === options.style) ?? 'meter',
     effects: { reacts: on('reacts'), stock: on('stock'), celebrate: on('celebrate'), shimmer: on('shimmer'), grow: on('grow') },
     display: normalizeDisplay(options),
     stripLabels: on('stripLabels'),
-    stripTurns: STRIP_TURN_CHOICES.find(t => t === turns) ?? 12,
+    stripTurns: countIn(options.stripTurns, 4, 24, 8),
+    chartBars: countIn(options.chartBars, 4, 32, 16),
     gapAbove: on('gapAbove'),
   }
 }
@@ -128,10 +136,10 @@ export function stripWidths(values: number[], cols: number): number[] {
   return widths
 }
 
-/** The running turn's block is at least this wide (with a blank cell between blocks; 2 when the blocks touch). */
-const MIN_LIVE = 3
-/** Any other turn's block is at least this wide (with a blank cell between blocks; 1 when the blocks touch). */
-const MIN_TURN = 2
+/** The running turn's block is at least this wide. */
+const MIN_LIVE = 2
+/** Any other turn's block is at least this wide. */
+const MIN_TURN = 1
 /** A block shrinking away is at least this wide. */
 const MIN_LEAVING = 1
 
@@ -150,50 +158,37 @@ export type StripBlock = {
   width: number
 }
 
-/**
- * 1 (a blank cell between neighbours) when `count` blocks fit in `S` cells with room to spare, else 0 (the blocks touch).
- * The spare is half a cell per block past the minimums: without it every block sits at its minimum and a costly turn
- * looks as wide as a cheap one.
- */
-export function stripGap(count: number, S: number): 0 | 1 {
-  return count * 3 - 1 + Math.ceil(count / 2) <= S ? 1 : 0
-}
-
-/** The least a block is wide: `gap` 1 (blank cell between blocks) live 3, turn 2; `gap` 0 (blocks touch) live 2, turn 1. */
-const minWidth = (b: StripBlock, gap: 0 | 1): number =>
-  b.kind === 'live' ? MIN_LIVE - (1 - gap) : b.kind === 'turn' ? MIN_TURN - (1 - gap) : MIN_LEAVING
+/** The least a block is wide: live 2, turn 1, leaving 1. */
+const minWidth = (b: StripBlock): number => (b.kind === 'live' ? MIN_LIVE : b.kind === 'turn' ? MIN_TURN : MIN_LEAVING)
 
 /**
- * The blocks of a strip `S` cells wide, in the order given (leaving blocks first, the running turn last). With `gap` 1
- * a blank cell sits between neighbours; with `gap` 0 the blocks touch (each later block then starts with a hairline
- * that belongs to its own width). Widths follow `shown(key, target)`, the eased value of each block (the target by
+ * The blocks of a strip `S` cells wide, in the order given (leaving blocks first, the running turn last). The blocks
+ * touch (each later block starts with a hairline that belongs to its own width). Widths follow `shown(key, target)`, the eased value of each block (the target by
  * default). A block under its minimum takes cells, one at a time, from the widest block that stays at or above its own minimum.
  */
 export function stripLayout(
   items: StripItem[],
   S: number,
   shown: (key: string, target: number) => number = (_key, target) => target,
-  gap: 0 | 1 = 1,
 ): StripBlock[] {
   const blocks: StripBlock[] = items.map(item => {
     const key = `s:${item.n}`
 
     return { kind: item.kind, key, n: item.n, symbol: item.symbol, value: shown(key, item.value), target: item.value, width: 0 }
   })
-  const avail = Math.max(0, S - gap * Math.max(0, blocks.length - 1))
   const widths = stripWidths(
     blocks.map(b => b.value),
-    avail,
+    S,
   )
   blocks.forEach((b, i) => {
     b.width = widths[i] ?? 0
   })
   const order = [...blocks.filter(b => b.kind === 'live'), ...blocks.filter(b => b.kind !== 'live')]
   for (const block of order) {
-    while (block.width < minWidth(block, gap)) {
+    while (block.width < minWidth(block)) {
       let donor: StripBlock | undefined
       for (const b of blocks) {
-        if (b === block || b.width - 1 < minWidth(b, gap)) continue
+        if (b === block || b.width - 1 < minWidth(b)) continue
         if (donor === undefined || b.width > donor.width) donor = b
       }
       if (donor === undefined) break
@@ -542,8 +537,8 @@ function meterVisual(c: Ctx): Visual {
 
 function chartVisual(c: Ctx): Visual {
   return {
-    min: 8,
-    max: 32,
+    min: Math.min(8, c.settings.chartBars),
+    max: c.settings.chartBars,
     build: C => {
       const k = Math.min(c.costs.length, c.live ? C - 1 : C)
       // The focused finished turn (a helper still at work) is lavender like a running one; every other bar keeps its ramp color.
@@ -614,12 +609,10 @@ function stripVisual(c: Ctx): Visual {
     min: 10,
     max: 512,
     build: S => {
-      // The window: the last `stripTurns` turns, the running one included. When all of them fit with a blank cell
-      // between neighbours and room left to show their sizes, that is how they are drawn; otherwise the blocks touch
-      // and each later one starts with a hairline.
+      // The window: the last `stripTurns` turns, the running one included, as many as fit. The blocks touch and each
+      // later one starts with a hairline.
       const K = Math.min(c.settings.stripTurns, c.entries.length + (c.live ? 1 : 0))
-      const gap = stripGap(K, S)
-      const k = gap === 1 ? K : Math.min(K, S - 1)
+      const k = Math.min(K, S - 1)
       const finished = c.live ? Math.max(0, k - 1) : k
       const shownEntries = finished === 0 ? [] : c.entries.slice(-finished)
       const items: StripItem[] = []
@@ -628,11 +621,10 @@ function stripVisual(c: Ctx): Visual {
       }
       for (const e of shownEntries) items.push({ kind: 'turn', n: e.n, symbol: e.symbol, value: e.costUsd })
       if (c.live) items.push({ kind: 'live', n: c.n, symbol: c.live.symbol, value: c.turnTarget })
-      const blocks = stripLayout(items, S, (key, target) => ease(c, key, target), gap)
+      const blocks = stripLayout(items, S, (key, target) => ease(c, key, target))
       const total = blocks.reduce((s, b) => (b.kind === 'leaving' ? s : s + b.value), 0)
       const cells: Cell[] = []
       blocks.forEach((b, i) => {
-        if (i > 0 && gap === 1) cells.push(space())
         const old = b.kind === 'leaving' ? c.entries.find(x => x.n === b.n) : undefined
         // The focused finished turn (a helper still at work) takes the lavender of the running block.
         const isFocus = b.kind === 'turn' && c.isGrowing && b.n === c.n
@@ -660,9 +652,9 @@ function stripVisual(c: Ctx): Visual {
             if (target) block[j] = { cp: cell.cp, fg: isBright(target.bg) ? DARK : WHITE, bg: target.bg }
           })
         }
-        // Touching blocks: a thin dark line at the left edge of every block after the first, in place of its leading space.
+        // A thin dark line at the left edge of every block after the first, in place of its leading space.
         const first = block[0]
-        if (gap === 0 && i > 0 && first !== undefined) block[0] = glyph(GLYPH.hairline, DARK, first.bg)
+        if (i > 0 && first !== undefined) block[0] = glyph(GLYPH.hairline, DARK, first.bg)
         cells.push(...block)
       })
 

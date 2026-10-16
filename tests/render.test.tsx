@@ -525,7 +525,7 @@ test('the strip style writes names inside the blocks', { options: { ...EFFECTS_O
   await twoTurns($, w)
   const row = rowText(await drawing(await mount($, { ...HINT, viewport: { columns: 122, rows: 40 } as never })))
   expect(row).toContain(' EXPLAI 21%')
-  expect(row).toContain(' FIX 79%')
+  expect(row).toContain('▏FIX 79%')
 })
 
 test('strip labels off: the blocks carry no text', { options: { ...EFFECTS_OFF, style: 'strip', stripLabels: 'off' } }, async ($, on) => {
@@ -674,7 +674,7 @@ test('a long session keeps its strip after a turn ends', { options: { ...EFFECTS
   const runsIn = (cells: Cell[]): number => {
     let count = 0
     // The label ● GO (4 cells) and its divider come first: the 59-cell strip is cells 17 to 75.
-    for (let i = 17; i <= 75; i++) if (cells[i]?.bg !== DEFAULT && (i === 17 || cells[i - 1]?.bg === DEFAULT)) count++
+    for (let i = 17; i <= 75; i++) if (cells[i]?.bg !== DEFAULT && (i === 17 || cells[i - 1]?.bg === DEFAULT || cells[i]?.cp === 0x258f)) count++
     return count
   }
   const first = rowCells(await drawing(ui))

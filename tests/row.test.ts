@@ -40,7 +40,7 @@ import {
 } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { formatCost, formatTokens, logShare } from '../hooks/format'
-import { composeRow, meterCells, normalizeSettings, stripGap, stripLayout, stripWidths, tokenCells } from '../hooks/row'
+import { composeRow, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells } from '../hooks/row'
 import type { StripItem, TokenFigure } from '../hooks/row'
 
 const EFFECTS_OFF = { reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
@@ -115,7 +115,8 @@ function bgRuns(cells: Cell[], from: number, to: number): { start: number; end: 
   for (let i = from; i <= to; i++) {
     const on = cells[i]?.bg !== DEFAULT
     const last = runs.at(-1)
-    if (on && last !== undefined && last.end === i - 1) last.end = i
+    // A hairline starts a new block even where it touches the one before.
+    if (on && last !== undefined && last.end === i - 1 && cells[i]?.cp !== 0x258f) last.end = i
     else if (on) runs.push({ start: i, end: i })
   }
 
@@ -128,7 +129,8 @@ test('normalizeSettings: the style, the five effects, the strip labels and the g
     effects: { reacts: true, stock: true, celebrate: true, shimmer: true, grow: true },
     display: DEFAULT_DISPLAY,
     stripLabels: true,
-    stripTurns: 12,
+    stripTurns: 8,
+    chartBars: 16,
     gapAbove: true,
   })
   const odd = normalizeSettings({ style: 'bogus', stock: 'off', stripLabels: 'off', gapAbove: 'off', particles: 'on' })
@@ -139,13 +141,14 @@ test('normalizeSettings: the style, the five effects, the strip labels and the g
   expect(odd.gapAbove).toBe(false)
 })
 
-test('normalizeSettings: strip turns', () => {
-  expect(normalizeSettings({}).stripTurns).toBe(12)
-  expect(normalizeSettings({ stripTurns: '8' }).stripTurns).toBe(8)
-  expect(normalizeSettings({ stripTurns: '16' }).stripTurns).toBe(16)
-  expect(normalizeSettings({ stripTurns: '24' }).stripTurns).toBe(24)
-  expect(normalizeSettings({ stripTurns: 'bogus' }).stripTurns).toBe(12)
-  expect(normalizeSettings({ stripTurns: '10' }).stripTurns).toBe(12)
+test('normalizeSettings: strip turns from 4 to 24, chart bars from 4 to 32', () => {
+  expect(normalizeSettings({}).stripTurns).toBe(8)
+  for (const n of [4, 5, 10, 17, 24]) expect(normalizeSettings({ stripTurns: String(n) }).stripTurns).toBe(n)
+  for (const odd of ['bogus', '3', '25', '7.5', '']) expect(normalizeSettings({ stripTurns: odd }).stripTurns).toBe(8)
+
+  expect(normalizeSettings({}).chartBars).toBe(16)
+  for (const n of [4, 9, 20, 31, 32]) expect(normalizeSettings({ chartBars: String(n) }).chartBars).toBe(n)
+  for (const odd of ['bogus', '3', '33', '6.5', '']) expect(normalizeSettings({ chartBars: odd }).chartBars).toBe(16)
 })
 
 test('meter, still: the left core, the label, the Blocks bar, the dividers and the figures in plain gray', () => {
@@ -174,6 +177,30 @@ test('meter, still: the left core, the label, the Blocks bar, the dividers and t
   expect(cells.filter(c => c.bg !== DEFAULT).length).toBe(0)
 })
 
+test('chart bars: the chart has that many bars, the newest turns at the right', () => {
+  const costs = [0.1, 0.2, 0.3, 0.9, 0.1, 0.2]
+  for (const bars of [4, 5, 10]) {
+    const { cells } = compose(entriesOf(costs), { ...EFFECTS_OFF, style: 'chart', chartBars: String(bars) }, 100)
+    // The label and its divider come first; the bars run up to the divider before the cost.
+    const row = text(cells)
+    const start = row.indexOf('│ ', row.indexOf('●')) + 2
+    const end = row.indexOf(' │ $')
+    expect(end - start).toBe(bars)
+    const slots = cells.slice(start, end)
+    const filled = Math.min(bars, costs.length)
+    expect(slots.slice(0, bars - filled).every(c => c.cp === 0x2581 && c.fg === EMPTY_BAR)).toBe(true)
+    expect(slots.slice(bars - filled).every(c => c.fg !== EMPTY_BAR)).toBe(true)
+  }
+})
+
+test('strip turns: 4 and 5 blocks', () => {
+  const turns = Array.from({ length: 10 }, (_, i) => entry({ n: i + 1, symbol: 'TURN', costUsd: 0.1 }))
+  for (const count of [4, 5]) {
+    const cells = compose(turns, { ...EFFECTS_OFF, style: 'strip', stripTurns: String(count) }, 110).cells
+    expect(cells.filter(c => c.cp === 0x258f).length).toBe(count - 1)
+  }
+})
+
 test('meter: a turn of $0.20 fills 29 of the 49 cells on the fixed log scale', () => {
   const { cells } = compose(entriesOf([0.4, 0.2]), EFFECTS_OFF, 100)
   const start = cells.findIndex(c => c.cp === 0x2588)
@@ -185,55 +212,44 @@ test('meter: a turn of $0.20 fills 29 of the 49 cells on the fixed log scale', (
 
 test('chart: one bar per turn, newest at the right, empty slots on the left, teal by the median', () => {
   const { cells } = compose(entriesOf([0.1, 0.2, 0.3, 0.9]), { ...EFFECTS_OFF, style: 'chart' }, 100)
-  // The label (● BRAVO, 7 cells) and its divider come first: the 32 bars start at cell 20.
+  // The label (● BRAVO, 7 cells) and its divider come first: the 16 bars start at cell 20.
   expect(text(cells.slice(0, 20))).toBe('Σ $1.50 │ ● BRAVO │ ')
-  const slots = cells.slice(20, 52)
-  expect(slots.slice(0, 28).every(c => c.cp === 0x2581 && c.fg === EMPTY_BAR)).toBe(true)
-  expect(slots.slice(28).map(c => c.cp)).toEqual([0x2584, 0x2585, 0x2585, 0x2587])
-  expect(slots.slice(28).map(c => c.fg)).toEqual([RAMP[0], RAMP[1], RAMP[2], RAMP[3]])
+  const slots = cells.slice(20, 36)
+  expect(text(cells.slice(36, 39))).toBe(' │ ')
+  expect(slots.slice(0, 12).every(c => c.cp === 0x2581 && c.fg === EMPTY_BAR)).toBe(true)
+  expect(slots.slice(12).map(c => c.cp)).toEqual([0x2584, 0x2585, 0x2585, 0x2587])
+  expect(slots.slice(12).map(c => c.fg)).toEqual([RAMP[0], RAMP[1], RAMP[2], RAMP[3]])
 })
 
 test('strip: widths follow the shares, names sit inside the blocks, a young session is gray', () => {
   const { cells } = reference({ ...EFFECTS_OFF, style: 'strip' }, 120)
   const row = text(cells)
-  expect(stripWidths([0.11, 0.42], 68)).toEqual([14, 54])
+  expect(stripWidths([0.11, 0.42], 69)).toEqual([14, 55])
   expect(row).toContain(' EXPLAI 21%')
-  expect(row).toContain(' FIX 79%')
+  expect(row).toContain('▏FIX 79%')
   // The label (● FIX, 5 cells) and its divider come first: the strip starts at cell 18.
   expect(text(cells.slice(0, 18))).toBe('Σ $0.53 │ ● FIX │ ')
   expect(cells[18]?.bg).toBe(FIGURES)
-  expect(cells[32]?.cp).toBe(0x20)
-  expect(cells[32]?.bg).toBe(DEFAULT)
-  expect(cells[33]?.bg).toBe(FIGURES)
+  // The blocks touch: the second starts with a hairline at cell 32.
+  expect(cells[32]?.cp).toBe(0x258f)
+  expect(cells[32]?.bg).toBe(FIGURES)
   const at = row.indexOf(' EXPLAI 21%')
   expect(cells.slice(at + 1, at + 11).every(c => c.fg === DARK)).toBe(true)
   expect(stripWidths([1, 0, 0], 5)).toEqual([3, 1, 1])
   expect(stripWidths([0, 0], 5)).toEqual([2, 3])
   // Narrower: the first block has room for the name only.
   const narrow = text(reference({ ...EFFECTS_OFF, style: 'strip' }, 100).cells)
-  expect(stripWidths([0.11, 0.42], 48)).toEqual([10, 38])
+  expect(stripWidths([0.11, 0.42], 49)).toEqual([10, 39])
   expect(narrow).toContain(' EXPLAI ')
   expect(narrow).not.toContain('EXPLAI 21%')
 })
 
-test('stripLayout: a tiny turn keeps two cells, taken from the widest blocks', () => {
+test('stripLayout: a tiny turn keeps one cell, taken from the widest blocks', () => {
   const values = [1, 1, 1, 1, 1, 1, 1, 0.001]
   const items: StripItem[] = values.map((value, i) => ({ kind: 'turn', n: i + 1, symbol: SYMBOLS[i] ?? 'TURN', value }))
   const blocks = stripLayout(items, 40)
-  expect(blocks.map(b => b.width)).toEqual([4, 4, 4, 4, 5, 5, 5, 2])
+  expect(blocks.map(b => b.width)).toEqual([5, 5, 5, 6, 6, 6, 6, 1])
   expect(blocks.every(b => b.kind === 'turn')).toBe(true)
-})
-
-test('stripLayout: the running turn keeps three cells at the least', () => {
-  const items: StripItem[] = [
-    { kind: 'turn', n: 1, symbol: 'AAA', value: 0.9 },
-    { kind: 'turn', n: 2, symbol: 'BBB', value: 0.9 },
-    { kind: 'live', n: 3, symbol: 'CCC', value: 0 },
-  ]
-  const blocks = stripLayout(items, 20)
-  expect(blocks.map(b => b.kind)).toEqual(['turn', 'turn', 'live'])
-  expect(blocks.reduce((s, b) => s + b.width, 0)).toBe(18)
-  expect(blocks[2]?.width).toBe(3)
 })
 
 test('strip labels off: the blocks carry no text', () => {
@@ -247,18 +263,18 @@ test('strip labels off: the blocks carry no text', () => {
 test('strip ramp: finished blocks take the teal ramp and every turn keeps its own block', () => {
   const { cells } = compose(entriesOf([0.1, 0.2, 0.3, 0.9]), { ...EFFECTS_OFF, style: 'strip' }, 120)
   const row = text(cells)
-  expect(stripWidths([0.1, 0.2, 0.3, 0.9], 66)).toEqual([4, 9, 13, 40])
+  expect(stripWidths([0.1, 0.2, 0.3, 0.9], 69)).toEqual([5, 9, 14, 41])
   // The label (● BRAVO, 7 cells) and its divider come first: the strip starts at cell 20.
-  expect(cells.slice(20, 24).every(c => c.cp === 0x20 && c.bg === RAMP[0])).toBe(true)
-  expect(cells[24]?.bg).toBe(DEFAULT)
-  const fix = row.indexOf(' FIX 13%') + 1
+  expect(cells.slice(20, 25).every(c => c.bg === RAMP[0])).toBe(true)
+  expect(cells[25]?.cp).toBe(0x258f)
+  const fix = row.indexOf('▏FIX 13%') + 1
   expect(fix).toBe(26)
   expect(cells[fix]?.bg).toBe(RAMP[1])
   expect(cells[fix]?.fg).toBe(WHITE)
-  const alpha = row.indexOf(' ALPHA 20%') + 1
+  const alpha = row.indexOf('▏ALPHA 20%') + 1
   expect(cells[alpha]?.bg).toBe(RAMP[2])
   expect(cells[alpha]?.fg).toBe(DARK)
-  const bravo = row.indexOf(' BRAVO 60%') + 1
+  const bravo = row.indexOf('▏BRAVO 60%') + 1
   expect(cells[bravo]?.bg).toBe(RAMP[3])
   expect(cells[bravo]?.fg).toBe(DARK)
   expect(cells.slice(20, 89).some(c => c.cp === 0x2591)).toBe(false)
@@ -273,14 +289,14 @@ test('a long session keeps 8 colored blocks, also when the running turn ends', (
   const options = { ...EFFECTS_OFF, style: 'strip', stripTurns: '8' }
   const turns = longSession()
   const items: StripItem[] = turns.slice(17).map(e => ({ kind: 'turn', n: e.n, symbol: e.symbol, value: e.costUsd }))
-  expect(stripLayout(items, 59).map(b => b.width)).toEqual([7, 6, 7, 6, 7, 6, 7, 6])
+  expect(stripLayout(items, 59).map(b => b.width)).toEqual([8, 6, 8, 7, 8, 7, 8, 7])
 
   const finished = compose(turns, options, 110).cells
   // The label comes first: ● TURN (6 cells) puts the 59-cell strip at cells 19 to 77.
   const runs = bgRuns(finished, 19, 77)
   expect(runs.length).toBe(8)
-  expect(runs.slice(1).every((r, i) => r.start - (runs[i]?.end ?? 0) === 2)).toBe(true)
-  expect(finished.slice(19, 78).filter(c => c.bg !== DEFAULT).every(c => c.bg === RAMP[2])).toBe(true)
+  expect(runs.slice(1).every((r, i) => r.start - (runs[i]?.end ?? 0) === 1)).toBe(true)
+  expect(finished.slice(19, 78).every(c => c.bg === RAMP[2])).toBe(true)
   expect(finished.some(c => c.cp === 0x2591)).toBe(false)
 
   // The same session with the 25th turn still running (● EXPLAI, 8 cells: the strip at cells 21 to 79), and again once it has ended.
@@ -351,8 +367,8 @@ test('shimmer sweeps the current turn while tokens flow', () => {
   const pulse = createAnim(2)
   syncTargets(pulse, scene, chart, 's')
   markFlow(pulse)
-  // ● EXPLAI (8 cells) and its divider put the 32 bars at cells 21 to 52.
-  expect(composeRow(scene, pulse, chart, 100, false).cells[52]?.fg).toBe(lighten(LIVE, 0.55))
+  // ● EXPLAI (8 cells) and its divider put the 16 bars at cells 21 to 36.
+  expect(composeRow(scene, pulse, chart, 100, false).cells[36]?.fg).toBe(lighten(LIVE, 0.55))
 })
 
 test('narrow rows drop whole groups in order, never leaving a bar dangling or doubled', () => {
@@ -423,7 +439,7 @@ test('the label setting numbered reads #n and the symbol, the running turn with 
   const strip = text(reference({ ...EFFECTS_OFF, label: 'numbered', style: 'strip' }, 120).cells)
   expect(strip).toContain('● #2 FIX │ ')
   expect(strip).toContain(' EXPLAI 21%')
-  expect(strip).toContain(' FIX 79%')
+  expect(strip).toContain('▏FIX 79%')
 })
 
 test('change off keeps one divider pair around the cost', () => {
@@ -964,18 +980,14 @@ test('the chart bar of the running turn rises through the block heights', () => 
   const seen: number[] = []
   for (const t of [0, 1, 2, 3, 4]) {
     anim.tick = t
-    // ● EXPLAI (8 cells) and its divider put the 32 bars at cells 21 to 52.
-    seen.push(composeRow(after, anim, settings, 100, false).cells[52]?.cp ?? 0)
+    // ● EXPLAI (8 cells) and its divider put the 16 bars at cells 21 to 36.
+    seen.push(composeRow(after, anim, settings, 100, false).cells[36]?.cp ?? 0)
   }
   expect(seen).toEqual([0x2581, 0x2582, 0x2583, 0x2584, 0x2584])
 })
 
-/** The width of the first strip block: the cells from cell `start` up to the first one on the default background. */
-const firstBlock = (cells: Cell[], start: number): number => {
-  const gap = cells.findIndex((c, i) => i >= start && c.bg === DEFAULT)
-
-  return gap - start
-}
+/** The width of the first strip block: the cells from cell `start` up to the next hairline. */
+const firstBlock = (cells: Cell[], start: number): number => cells.findIndex((c, i) => i > start && c.cp === 0x258f) - start
 
 test('strip blocks slide to their new widths, the growing one pushing the others', () => {
   const settings = normalizeSettings({ reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', style: 'strip' })
@@ -991,7 +1003,7 @@ test('strip blocks slide to their new widths, the growing one pushing the others
     expect(cells.length).toBe(120)
     widths.push(firstBlock(cells, 18))
   }
-  expect(widths).toEqual([34, 24, 19, 18, 17])
+  expect(widths).toEqual([34, 24, 20, 18, 17])
   expect(isSettled(anim)).toBe(true)
 })
 
@@ -1037,7 +1049,7 @@ test('grow off: the final sizes show from the first frame', () => {
   const after: Scene = { entries: entriesOf([0.1]), live: live({ costUsd: 0.1 }), ledger: null, growing: [] }
   syncTargets(bars, before, chart, 's')
   composeRow(before, bars, chart, 100, false)
-  expect(composeRow(after, bars, chart, 100, false).cells[52]?.cp).toBe(0x2584)
+  expect(composeRow(after, bars, chart, 100, false).cells[36]?.cp).toBe(0x2584)
 })
 
 test('the live strip block has no dot, keeps lavender and still shimmers', () => {
@@ -1066,18 +1078,18 @@ test('the live strip block has no dot, keeps lavender and still shimmers', () =>
   expect(text(composeRow(scene, named, on, 120, false).cells.slice(21, 90))).toContain('EXPLAI')
 })
 
-test('stripLayout without gaps: the blocks touch, the running turn keeps two cells and a tiny turn one', () => {
+test('stripLayout: the blocks touch, the running turn keeps two cells and a tiny turn one', () => {
   const items: StripItem[] = [
     { kind: 'turn', n: 1, symbol: 'AAA', value: 0.9 },
     { kind: 'turn', n: 2, symbol: 'BBB', value: 0.9 },
     { kind: 'live', n: 3, symbol: 'CCC', value: 0 },
   ]
-  const blocks = stripLayout(items, 20, undefined, 0)
+  const blocks = stripLayout(items, 20)
   expect(blocks.map(b => b.width)).toEqual([9, 9, 2])
   expect(blocks.reduce((s, b) => s + b.width, 0)).toBe(20)
 
   const tiny: StripItem[] = Array.from({ length: 24 }, (_, i) => ({ kind: 'turn', n: i + 1, symbol: 'T', value: i === 23 ? 5 : 0.001 }))
-  const widths = stripLayout(tiny, 45, undefined, 0).map(b => b.width)
+  const widths = stripLayout(tiny, 45).map(b => b.width)
   expect(widths.reduce((s, w) => s + w, 0)).toBe(45)
   expect(widths.every(w => w >= 1)).toBe(true)
 })
@@ -1086,7 +1098,7 @@ test('stripLayout without gaps: the blocks touch, the running turn keeps two cel
 const thirty = (): Entry[] =>
   Array.from({ length: 30 }, (_, i) => entry({ n: i + 1, symbol: 'TURN', costUsd: (i + 1) % 2 === 1 ? 0.1 : 0.12 }))
 
-test('each strip count: blank cells between blocks while they fit, hairlines when they do not', () => {
+test('each strip count: touching blocks, a hairline at the start of each later one', () => {
   const turns = thirty()
   const strip = (stripTurns?: string) =>
     compose(turns, stripTurns === undefined ? { ...EFFECTS_OFF, style: 'strip' } : { ...EFFECTS_OFF, style: 'strip', stripTurns }, 110, {
@@ -1099,15 +1111,15 @@ test('each strip count: blank cells between blocks while they fit, hairlines whe
     // The label ● TURN (6 cells) and its divider come first: the 59-cell strip is cells 19 to 77.
     const runs = bgRuns(cells, 19, 77)
     expect(runs.length).toBe(count)
-    expect(runs.slice(1).every((r, i) => r.start - (runs[i]?.end ?? 0) === 2)).toBe(true)
-    expect(cells.some(c => c.cp === 0x258f)).toBe(false)
+    expect(cells.slice(19, 78).every(c => c.bg !== DEFAULT)).toBe(true)
+    expect(cells.filter(c => c.cp === 0x258f).length).toBe(count - 1)
     expect(cells.some(c => c.cp === 0x2591)).toBe(false)
   }
-  // The default is 12.
-  expect(text(strip())).toBe(text(strip('12')))
-  expect(bgRuns(strip(), 19, 77).length).toBe(12)
+  // The default is 8.
+  expect(text(strip())).toBe(text(strip('8')))
+  expect(bgRuns(strip(), 19, 77).length).toBe(8)
 
-  // 24 turns need more than the 59 cells with a blank between them: the blocks touch, a hairline starts each later one.
+  // 24 turns the same way.
   const cells = strip('24')
   expect(cells.length).toBe(110)
   expect(cells.slice(19, 78).every(c => c.bg !== DEFAULT)).toBe(true)
@@ -1116,19 +1128,10 @@ test('each strip count: blank cells between blocks while they fit, hairlines whe
   expect(hairlines.every(c => c.fg === DARK)).toBe(true)
   expect(cells.some(c => c.cp === 0x2591)).toBe(false)
   const items: StripItem[] = turns.slice(-24).map(e => ({ kind: 'turn', n: e.n, symbol: e.symbol, value: e.costUsd }))
-  const widths = stripLayout(items, 59, undefined, 0).map(b => b.width)
+  const widths = stripLayout(items, 59).map(b => b.width)
   expect(widths.length).toBe(24)
   expect(widths.every(w => w >= 1)).toBe(true)
   expect(widths.reduce((s, w) => s + w, 0)).toBe(59)
-})
-
-test('stripGap: blanks between blocks only with half a cell per block to spare past the minimums', () => {
-  // 8 blocks: 23 cells is just the minimums with blanks, 27 the first with room to spare.
-  expect(stripGap(8, 23)).toBe(0)
-  expect(stripGap(8, 26)).toBe(0)
-  expect(stripGap(8, 27)).toBe(1)
-  expect([8, 12, 16].map(count => stripGap(count, 59))).toEqual([1, 1, 1])
-  expect(stripGap(24, 59)).toBe(0)
 })
 
 test('8 turns in a tight strip: the blocks touch so a costly turn stays wider than the cheap ones', () => {
@@ -1139,7 +1142,7 @@ test('8 turns in a tight strip: the blocks touch so a costly turn stays wider th
   expect(cells.slice(19, 42).every(c => c.bg !== DEFAULT)).toBe(true)
   const hairlines = cells.map((c, i) => (c.cp === 0x258f ? i : -1)).filter(i => i >= 0)
   expect(hairlines.length).toBe(7)
-  // The costly turn takes 16 of the 23 cells; with blanks between blocks all eight would be 2 cells.
+  // The costly turn takes 16 of the 23 cells.
   expect(42 - (hairlines.at(-1) ?? 0)).toBe(16)
 })
 
@@ -1170,7 +1173,7 @@ test('hairline labels: the hairline stands where the leading space was, a wide b
   ]
   const { cells } = compose(turns, { style: 'strip', stripTurns: '16' }, 110, { ledger: 7.9, still: true })
   const row = text(cells)
-  // 16 blocks do not fit with blanks in 45 cells: the 15 cheap turns are one cell each, the costly one takes the rest.
+  // 16 blocks in 45 cells: the 15 cheap turns are one cell each, the costly one takes the rest.
   const at = row.indexOf('TURN 77%')
   expect(at).toBeGreaterThan(10)
   expect(cells[at - 1]?.cp).toBe(0x258f)
@@ -1191,9 +1194,9 @@ test('the meter length follows the fixed log dollar scale', () => {
 test('the chart never rescales: a pricier turn does not move the other bars', () => {
   const options = { ...EFFECTS_OFF, style: 'chart' }
   const alone = compose(entriesOf([0.1]), options, 100, { ledger: 0.1 }).cells
-  // ● EXPLAI (8 cells) puts the 32 bars at cells 21 to 52; ● FIX (5 cells) at cells 18 to 49.
-  expect(alone[52]?.cp).toBe(0x2584)
+  // ● EXPLAI (8 cells) puts the 16 bars at cells 21 to 36; ● FIX (5 cells) at cells 18 to 33.
+  expect(alone[36]?.cp).toBe(0x2584)
   const beside = compose(entriesOf([0.1, 5]), options, 100, { ledger: 5.1 }).cells
-  expect(beside[48]?.cp).toBe(0x2584)
-  expect(beside[49]?.cp).toBe(0x2588)
+  expect(beside[32]?.cp).toBe(0x2584)
+  expect(beside[33]?.cp).toBe(0x2588)
 })

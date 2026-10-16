@@ -9,7 +9,7 @@
     "style": {
       "type": "string",
       "title": "Style",
-      "description": "meter: a bar of blocks that fills while the turn runs, on a fixed dollar scale (full at $2). chart: one small bar per recent turn, its height the cost on a fixed dollar scale. strip: the recent turns side by side (setting Strip turns), each block as wide as its share of them.",
+      "description": "meter: a bar of blocks that fills while the turn runs, on a fixed dollar scale (full at $2). chart: one small bar per recent turn (setting Chart bars), its height the cost on a fixed dollar scale. strip: the recent turns side by side (setting Strip turns), each block as wide as its share of them.",
       "default": "meter",
       "options": ["meter", "chart", "strip"]
     },
@@ -23,9 +23,16 @@
     "stripTurns": {
       "type": "string",
       "title": "Strip turns",
-      "description": "How many recent turns the strip style shows, the running one included. More turns make narrower blocks: names show only where they fit, and with many blocks a thin line replaces the blank cell between them.",
-      "default": "12",
-      "options": ["8", "12", "16", "24"]
+      "description": "How many recent turns the strip style shows, the running one included: 4 to 24. More turns make narrower blocks: names show only where they fit.",
+      "default": "8",
+      "options": ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+    },
+    "chartBars": {
+      "type": "string",
+      "title": "Chart bars",
+      "description": "How many bars the chart style has, one per recent turn, the running one included: 4 to 32. Fewer bars when the window is too narrow.",
+      "default": "16",
+      "options": ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24", "25", "26", "27", "28", "29", "30", "31", "32"]
     },
     "reacts": {
       "type": "string",
