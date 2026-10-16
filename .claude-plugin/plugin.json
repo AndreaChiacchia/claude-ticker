@@ -1,6 +1,6 @@
 {
   "name": "claudeticker",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "A row under the prompt that shows what each turn spent: a live cost meter, a bar chart of turns or a cost-share strip, colored against the session, with token counts that roll like an odometer",
   "author": { "name": "AndreaChiacchia", "url": "https://github.com/AndreaChiacchia" },
   "types": "./types/index.d.ts",
