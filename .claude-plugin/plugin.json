@@ -9,14 +9,28 @@
     "style": {
       "type": "string",
       "title": "Style",
-      "description": "meter: a bar of blocks that fills while the turn runs, on a fixed dollar scale (full at $2). chart: one small bar per recent turn (setting Chart bars), its height the cost on a fixed dollar scale. strip: the recent turns side by side (setting Strip turns), each block as wide as its share of them.",
+      "description": "meter: a bar that fills while the turn runs (setting Meter style), on a fixed dollar scale (full at $2). chart: one small bar per recent turn (settings Chart style and Chart bars), its height the cost on a fixed dollar scale. strip: the recent turns side by side (settings Strip style and Strip turns), each block as wide as its share of them.",
       "default": "meter",
       "options": ["meter", "chart", "strip"]
+    },
+    "meterStyle": {
+      "type": "string",
+      "title": "Meter style",
+      "description": "The look of the meter style's bar. blocks: █ on ░, the tip easing by eighths of a cell while the bar moves. parallelogram: ▰ on ▱. shade: ▓ on ░. solid: █ on a gray █. smooth: █ on ░, the edge always by eighths of a cell. smooth-bare: the same on blank. line: ━ on ─. heavy: a bold ━ on a dim ━. dots: ● on ○. squares: ■ on □. diamonds: ◆ on ◇. braille: ⣿ on ⣀. ascii: # on - between [ and ], for fonts without these glyphs. arrow: ===> between [ and ].",
+      "default": "blocks",
+      "options": ["blocks", "parallelogram", "shade", "solid", "smooth", "smooth-bare", "line", "heavy", "dots", "squares", "diamonds", "braille", "ascii", "arrow"]
+    },
+    "stripStyle": {
+      "type": "string",
+      "title": "Strip style",
+      "description": "The look of the strip style's blocks. blocks: colored backgrounds, each later block starting with a thin dark line, names inside where they fit (setting Strip labels). shade: ▓ cells. parallelogram: ▰ cells. squares: ■ cells. dots: ● cells. braille: ⣿ cells. ascii: # cells. In these the cells take the block's color, each later block starts with a hollow cell (░ ▱ □ ○ ⣀ |), and the blocks carry no names.",
+      "default": "blocks",
+      "options": ["blocks", "shade", "parallelogram", "squares", "dots", "braille", "ascii"]
     },
     "stripLabels": {
       "type": "string",
       "title": "Strip labels",
-      "description": "on: each block of the strip style shows its turn name and share (FIX 13%) where it fits. off: plain colored blocks.",
+      "description": "on: each block of the strip style shows its turn name and share (FIX 13%) where it fits. off: plain colored blocks. Only with the blocks strip style.",
       "default": "on",
       "options": ["on", "off"]
     },
@@ -26,6 +40,13 @@
       "description": "How many recent turns the strip style shows, the running one included: 4 to 24. More turns make narrower blocks: names show only where they fit.",
       "default": "8",
       "options": ["4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15", "16", "17", "18", "19", "20", "21", "22", "23", "24"]
+    },
+    "chartStyle": {
+      "type": "string",
+      "title": "Chart style",
+      "description": "The look of the chart style's bars. spark: ▁▂▃▄▅▆▇█, one block per turn as tall as its cost. braille: ⡀⣀⣄⣤⣦⣶⣷⣿, a cell filling with dots from the bottom. shade: ░▒▓█, every cell full height, denser the costlier.",
+      "default": "spark",
+      "options": ["spark", "braille", "shade"]
     },
     "chartBars": {
       "type": "string",

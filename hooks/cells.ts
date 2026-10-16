@@ -8,6 +8,10 @@ export const DOWN = 0x5fff00
 export const FLAT = 0x585858
 export const FIGURES = 0x8a8a8a
 export const SEP = 0x585858
+/** The dot between the row's sections: claudespotter's PLAIN, the cell twin of claudepeeker's dim middle-dot separator. */
+export const DIVIDER = 0x8a8a8a
+/** The empty track of the heavy meter style: a dim heavy line (claudecharter's TRACK_HEAVY). */
+export const TRACK_HEAVY = 0x444444
 /** The running turn: lavender, a hue none of the teal ramp steps has. */
 export const LIVE = 0xafafd7
 
@@ -69,19 +73,14 @@ export function isBright(bg: number): boolean {
   return 0.299 * r + 0.587 * g + 0.114 * b >= 110
 }
 
-/** Glyphs by code point. `bars` is indexed from 1; index 0 is unused. */
+/** Glyphs by code point. */
 export const GLYPH = {
   sigma: 0x03a3,
-  sep: 0x2502,
+  sep: 0x00b7,
   live: 0x25cf,
   liveOff: 0x25cb,
-  /** The empty cell of the meter bar (the Blocks look). */
-  track: 0x2591,
-  /** The filled cell of the meter bar. */
-  full: 0x2588,
   /** A thin line at the left edge of a cell: the boundary between strip blocks that touch. */
   hairline: 0x258f,
-  bars: [0x20, 0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588],
   toolL: 0x2039,
   toolR: 0x203a,
   bang: 0x203c,

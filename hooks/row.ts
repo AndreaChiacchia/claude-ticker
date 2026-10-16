@@ -6,6 +6,7 @@ import {
   DARK,
   DEFAULT,
   DELTA_COLOR,
+  DIVIDER,
   EMPTY_BAR,
   FIGURES,
   FLASH_DOWN,
@@ -32,11 +33,26 @@ import {
 import type { Cell, Display } from './cells'
 import { formatCost, formatDelta, formatPercentDelta, formatTokens, logShare, rampFor } from './format'
 import type { Delta } from './format'
+import {
+  CHART_STYLES,
+  DEFAULT_CHART_STYLE,
+  DEFAULT_METER_STYLE,
+  DEFAULT_STRIP_STYLE,
+  METER_STYLES,
+  STRIP_STYLES,
+  isChartStyle,
+  isMeterStyle,
+  isStripStyle,
+} from './styles'
+import type { ChartStyleId, MeterStyleId, StripStyleId } from './styles'
 
 export type Style = 'meter' | 'chart' | 'strip'
 export type Effects = { reacts: boolean; stock: boolean; celebrate: boolean; shimmer: boolean; grow: boolean }
 export type Settings = {
   style: Style
+  meterStyle: MeterStyleId
+  chartStyle: ChartStyleId
+  stripStyle: StripStyleId
   effects: Effects
   display: Display
   stripLabels: boolean
@@ -62,6 +78,9 @@ export function normalizeSettings(options: Record<string, unknown>): Settings {
 
   return {
     style: STYLES.find(s => s === options.style) ?? 'meter',
+    meterStyle: isMeterStyle(options.meterStyle) ? options.meterStyle : DEFAULT_METER_STYLE,
+    chartStyle: isChartStyle(options.chartStyle) ? options.chartStyle : DEFAULT_CHART_STYLE,
+    stripStyle: isStripStyle(options.stripStyle) ? options.stripStyle : DEFAULT_STRIP_STYLE,
     effects: { reacts: on('reacts'), stock: on('stock'), celebrate: on('celebrate'), shimmer: on('shimmer'), grow: on('grow') },
     display: normalizeDisplay(options),
     stripLabels: on('stripLabels'),
@@ -226,29 +245,54 @@ export function windowEntries(entries: Entry[], growing: readonly number[], focu
 }
 
 /**
- * The `B` cells of the meter bar in the Blocks look: `█` in `fg` for the filled part, `░` dim for the rest.
- * At rest the filled part is whole cells (at least one when `atLeastOne`); while `isMoving` the tip is an eighth block.
+ * The `B` cells of the meter bar in `style` and the span `[from, to)` of its filled cells (fill glyphs, eighth tip, arrow
+ * head), all in `fg`. A frame (the brackets of ascii and arrow) is dim and never part of the span. At rest the filled part
+ * is whole cells (at least one when `atLeastOne`); an eighth-block tip shows while `isMoving` (Blocks) or always (smooth).
  */
-export function meterCells(B: number, f: number, fg: number, isMoving: boolean, atLeastOne = false): Cell[] {
+export function meterBar(
+  B: number,
+  f: number,
+  fg: number,
+  isMoving: boolean,
+  atLeastOne = false,
+  style: MeterStyleId = 'blocks',
+): { cells: Cell[]; from: number; to: number } {
+  const st = METER_STYLES[style]
+  const hasOpen = st.open !== undefined
+  const hasClose = st.close !== undefined
+  const I = B - (hasOpen ? 1 : 0) - (hasClose ? 1 : 0)
+  const from = hasOpen ? 1 : 0
   const ratio = clamp01(f)
-  const cells: Cell[] = []
-  if (isMoving) {
-    let E = Math.round(ratio * B * 8)
+  const inner: Cell[] = []
+  let to: number
+  if (st.eighths === 'always' || (st.eighths === 'moving' && isMoving)) {
+    let E = Math.round(ratio * I * 8)
     if (atLeastOne && E < 1) E = 1
     const whole = Math.floor(E / 8)
     const part = E % 8
-    for (let i = 0; i < B; i++) {
-      if (i < whole) cells.push(glyph(GLYPH.full, fg))
-      else if (i === whole && part > 0) cells.push(glyph(TIP[part - 1] ?? GLYPH.full, fg))
-      else cells.push(glyph(GLYPH.track, SEP))
+    for (let i = 0; i < I; i++) {
+      if (i < whole) inner.push(glyph(st.fill, fg))
+      else if (i === whole && part > 0) inner.push(glyph(TIP[part - 1] ?? st.fill, fg))
+      else inner.push(glyph(st.track, st.trackColor))
     }
-
-    return cells
+    to = from + whole + (part > 0 ? 1 : 0)
+  } else {
+    const F = ratio > 0 || atLeastOne ? Math.max(1, Math.min(I, Math.round(ratio * I))) : 0
+    for (let i = 0; i < I; i++) inner.push(i < F ? glyph(st.fill, fg) : glyph(st.track, st.trackColor))
+    if (st.head !== undefined && F > 0 && F < I) inner[F - 1] = glyph(st.head, fg)
+    to = from + F
   }
-  const F = ratio > 0 || atLeastOne ? Math.max(1, Math.min(B, Math.round(ratio * B))) : 0
-  for (let i = 0; i < B; i++) cells.push(i < F ? glyph(GLYPH.full, fg) : glyph(GLYPH.track, SEP))
+  const cells: Cell[] = []
+  if (st.open !== undefined) cells.push(glyph(st.open, SEP))
+  cells.push(...inner)
+  if (st.close !== undefined) cells.push(glyph(st.close, SEP))
 
-  return cells
+  return { cells, from, to }
+}
+
+/** The `B` cells of the meter bar in `style` (Blocks by default); see `meterBar`. */
+export function meterCells(B: number, f: number, fg: number, isMoving: boolean, atLeastOne = false, style: MeterStyleId = 'blocks'): Cell[] {
+  return meterBar(B, f, fg, isMoving, atLeastOne, style).cells
 }
 
 /** The 12-cell badge slot: the tool flash, the cheap sparkle or NEW HIGH; blank when none shows, or on a still frame. */
@@ -443,16 +487,16 @@ function corePart(c: Ctx): Part {
     ...textCells('Σ ', DEFAULT),
     ...moneyCells(c.sigmaValue, c.anim.sigma, DEFAULT, c),
     space(),
-    glyph(GLYPH.sep, SEP),
+    glyph(GLYPH.sep, DIVIDER),
     space(),
   ]
 
   return { group: 'core', cells, reserve: cells.length }
 }
 
-/** A dim ` │ ` divider that belongs to `group`. */
+/** A ` · ` divider that belongs to `group`. */
 function dividerPart(group: PartId): Part {
-  return { group, cells: [space(), glyph(GLYPH.sep, SEP), space()], reserve: 3 }
+  return { group, cells: [space(), glyph(GLYPH.sep, DIVIDER), space()], reserve: 3 }
 }
 
 /** The pulsing live marker; a steady lavender `↻` for a finished turn a helper is still adding to; a dim steady dot otherwise. */
@@ -541,18 +585,16 @@ function meterVisual(c: Ctx): Visual {
       const isMoving = c.useTween && isTweening(c.anim, key)
       const fillTarget = c.live !== null || c.isGrowing ? LIVE : rampColor(rampFor(c.turnTarget, c.costs))
       const fill = easeColor(c, `c:meter:${c.n}`, fillTarget)
-      const bar = meterCells(B, f, fill, isMoving, c.turnTarget > 0)
-      const filled = bar.findIndex(x => x.cp === GLYPH.track)
-      const F = filled < 0 ? B : filled
+      const { cells: bar, from, to } = meterBar(B, f, fill, isMoving, c.turnTarget > 0, c.settings.meterStyle)
       if (c.live !== null ? c.isFlowing : growShimmer(c, c.n)) {
-        for (let i = 0; i < F; i++) {
+        for (let i = from; i < to; i++) {
           const cell = bar[i]
-          if (cell) bar[i] = { ...cell, fg: lighten(cell.fg, sweepAmount(i, F, c.anim.tick)) }
+          if (cell) bar[i] = { ...cell, fg: lighten(cell.fg, sweepAmount(i - from, to - from, c.anim.tick)) }
         }
       }
-      if (c.isBump && F > 0) {
-        const tip = bar[F - 1]
-        if (tip) bar[F - 1] = { ...tip, fg: WHITE }
+      if (c.isBump && to > from) {
+        const tip = bar[to - 1]
+        if (tip) bar[to - 1] = { ...tip, fg: WHITE }
       }
 
       return bar
@@ -561,6 +603,8 @@ function meterVisual(c: Ctx): Visual {
 }
 
 function chartVisual(c: Ctx): Visual {
+  const cs = CHART_STYLES[c.settings.chartStyle]
+
   return {
     min: Math.min(8, c.settings.chartBars),
     max: c.settings.chartBars,
@@ -582,7 +626,7 @@ function chartVisual(c: Ctx): Visual {
       })
       if (c.live) slots.push({ n: c.n, value: c.turnTarget, color: LIVE, isLive: true, isFocus: false })
       const cells: Cell[] = []
-      for (let i = 0; i < C - slots.length; i++) cells.push(glyph(GLYPH.bars[1] ?? 0x2581, EMPTY_BAR))
+      for (let i = 0; i < C - slots.length; i++) cells.push(glyph(cs.empty, EMPTY_BAR))
       for (const s of slots) {
         const r = ease(c, `chart:${s.n}`, logShare(s.value))
         let fg = easeColor(c, `c:chart:${s.n}`, s.color)
@@ -595,7 +639,7 @@ function chartVisual(c: Ctx): Visual {
           fg = lighten(fg, pulseAmount(c.anim.tick))
         }
         const level = s.value <= 0 ? 0 : Math.min(8, Math.max(1, Math.round(r * 8)))
-        cells.push(level === 0 ? glyph(GLYPH.bars[1] ?? 0x2581, EMPTY_BAR) : glyph(GLYPH.bars[level] ?? 0x2588, fg))
+        cells.push(level === 0 ? glyph(cs.empty, EMPTY_BAR) : glyph(cs.levels[level - 1] ?? cs.empty, fg))
       }
 
       return cells
@@ -630,6 +674,8 @@ function leavingTurns(c: Ctx, shown: ReadonlySet<number>): number[] {
 }
 
 function stripVisual(c: Ctx): Visual {
+  const ss = STRIP_STYLES[c.settings.stripStyle]
+
   return {
     min: 10,
     max: 512,
@@ -671,25 +717,40 @@ function stripVisual(c: Ctx): Visual {
                 ? FIGURES
                 : rampColor(rampFor(old.costUsd, c.costs))
               : rampColor(rampFor(b.target, c.costs))
-        let bg = easeColor(c, `c:${b.key}`, base)
-        if ((b.kind === 'live' || isFocus) && c.isBump) bg = LIVE_BUMP
-        const block = blank(b.width, bg)
-        if (b.kind === 'live' ? c.isFlowing : b.kind === 'turn' && growShimmer(c, b.n)) {
-          block.forEach((cell, j) => {
-            cell.bg = lighten(bg, sweepAmount(j, b.width, c.anim.tick))
-          })
+        let color = easeColor(c, `c:${b.key}`, base)
+        if ((b.kind === 'live' || isFocus) && c.isBump) color = LIVE_BUMP
+        const shimmering = b.kind === 'live' ? c.isFlowing : b.kind === 'turn' && growShimmer(c, b.n)
+        let block: Cell[]
+        if (ss.fill === null) {
+          // Background blocks: the color is the cells' background, the name sits inside where it fits.
+          block = blank(b.width, color)
+          if (shimmering) {
+            block.forEach((cell, j) => {
+              cell.bg = lighten(color, sweepAmount(j, b.width, c.anim.tick))
+            })
+          }
+          const pct = total > 0 ? Math.round((b.value / total) * 100) : 0
+          const label = stripLabel(b, pct, c.settings.stripLabels)
+          if (label !== null) {
+            textCells(' ' + label, DEFAULT).forEach((cell, j) => {
+              const target = block[j]
+              if (target) block[j] = { cp: cell.cp, fg: isBright(target.bg) ? DARK : WHITE, bg: target.bg }
+            })
+          }
+          // A thin dark line at the left edge of every block after the first, in place of its leading space.
+          const first = block[0]
+          if (i > 0 && first !== undefined) block[0] = glyph(ss.lead, DARK, first.bg)
+        } else {
+          // Glyph cells: every cell is the style's glyph in the block's color, with no name.
+          const fillCp = ss.fill
+          block = []
+          for (let j = 0; j < b.width; j++) {
+            block.push(glyph(fillCp, shimmering ? lighten(color, sweepAmount(j, b.width, c.anim.tick)) : color))
+          }
+          // The hollow lead cell at the left edge of every block after the first marks the boundary.
+          const first = block[0]
+          if (i > 0 && first !== undefined) block[0] = glyph(ss.lead, first.fg)
         }
-        const pct = total > 0 ? Math.round((b.value / total) * 100) : 0
-        const label = stripLabel(b, pct, c.settings.stripLabels)
-        if (label !== null) {
-          textCells(' ' + label, DEFAULT).forEach((cell, j) => {
-            const target = block[j]
-            if (target) block[j] = { cp: cell.cp, fg: isBright(target.bg) ? DARK : WHITE, bg: target.bg }
-          })
-        }
-        // A thin dark line at the left edge of every block after the first, in place of its leading space.
-        const first = block[0]
-        if (i > 0 && first !== undefined) block[0] = glyph(GLYPH.hairline, DARK, first.bg)
         cells.push(...block)
       })
 
@@ -706,7 +767,7 @@ const DROP_ORDER: PartId[] = ['badge', 'tokens', 'delta', 'label']
 type Seq = (Part | 'visual')[]
 
 /**
- * The parts in drawing order, the same for every style, with a dim divider after the label, after the visual and after the change:
+ * The parts in drawing order, the same for every style, with a ` · ` divider after the label, after the visual and after the change:
  * `core, label, |, visual, |, cost, delta, |, tokens, badge`. The divider after the label goes with the label, so a dropped
  * label leaves `core, visual, |, cost ...` and never a doubled or dangling bar.
  */

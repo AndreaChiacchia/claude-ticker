@@ -25,6 +25,7 @@ import {
   DARK,
   DEFAULT,
   DEFAULT_DISPLAY,
+  DIVIDER,
   DOWN,
   EMPTY_BAR,
   FIGURES,
@@ -33,6 +34,7 @@ import {
   RAMP,
   SEP,
   TOKEN_FLASH_UP,
+  TRACK_HEAVY,
   UP,
   WHITE,
   lighten,
@@ -40,8 +42,9 @@ import {
 } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { formatCost, formatTokens, logShare } from '../hooks/format'
-import { composeRow, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells, windowEntries } from '../hooks/row'
+import { composeRow, meterBar, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells, windowEntries } from '../hooks/row'
 import type { StripItem, TokenFigure } from '../hooks/row'
+import { CHART_STYLE_IDS, METER_STYLE_IDS, STRIP_STYLE_IDS } from '../hooks/styles'
 
 const EFFECTS_OFF = { reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
 
@@ -126,6 +129,9 @@ function bgRuns(cells: Cell[], from: number, to: number): { start: number; end: 
 test('normalizeSettings: the style, the five effects, the strip labels and the gap, each with a default', () => {
   expect(normalizeSettings({})).toEqual({
     style: 'meter',
+    meterStyle: 'blocks',
+    chartStyle: 'spark',
+    stripStyle: 'blocks',
     effects: { reacts: true, stock: true, celebrate: true, shimmer: true, grow: true },
     display: DEFAULT_DISPLAY,
     stripLabels: true,
@@ -133,8 +139,20 @@ test('normalizeSettings: the style, the five effects, the strip labels and the g
     chartBars: 16,
     gapAbove: true,
   })
-  const odd = normalizeSettings({ style: 'bogus', stock: 'off', stripLabels: 'off', gapAbove: 'off', particles: 'on' })
+  const odd = normalizeSettings({
+    style: 'bogus',
+    meterStyle: 'bogus',
+    chartStyle: '',
+    stripStyle: 'none',
+    stock: 'off',
+    stripLabels: 'off',
+    gapAbove: 'off',
+    particles: 'on',
+  })
   expect(odd.style).toBe('meter')
+  expect(odd.meterStyle).toBe('blocks')
+  expect(odd.chartStyle).toBe('spark')
+  expect(odd.stripStyle).toBe('blocks')
   expect(odd.effects.stock).toBe(false)
   expect(odd.effects.reacts).toBe(true)
   expect(odd.stripLabels).toBe(false)
@@ -155,8 +173,8 @@ test('meter, still: the left core, the label, the Blocks bar, the dividers and t
   const { cells } = reference(EFFECTS_OFF, 100)
   const row = text(cells)
   expect(cells.length).toBe(100)
-  expect(row.startsWith('Σ $0.53 │ ● FIX │ █')).toBe(true)
-  expect(row).toContain('░ │ $0.42 ▲0.31 │ 312K↓ 2.1K↑')
+  expect(row.startsWith('Σ $0.53 · ● FIX · █')).toBe(true)
+  expect(row).toContain('░ · $0.42 ▲0.31 · 312K↓ 2.1K↑')
   expect(row).not.toContain('%c')
   // The fixed log scale: $0.42 fills 36 of the 49 cells (100 minus the 51 of the other parts).
   const start = cells.findIndex(c => c.cp === 0x2588)
@@ -183,8 +201,8 @@ test('chart bars: the chart has that many bars, the newest turns at the right', 
     const { cells } = compose(entriesOf(costs), { ...EFFECTS_OFF, style: 'chart', chartBars: String(bars) }, 100)
     // The label and its divider come first; the bars run up to the divider before the cost.
     const row = text(cells)
-    const start = row.indexOf('│ ', row.indexOf('●')) + 2
-    const end = row.indexOf(' │ $')
+    const start = row.indexOf('· ', row.indexOf('●')) + 2
+    const end = row.indexOf(' · $')
     expect(end - start).toBe(bars)
     const slots = cells.slice(start, end)
     const filled = Math.min(bars, costs.length)
@@ -213,9 +231,9 @@ test('meter: a turn of $0.20 fills 29 of the 49 cells on the fixed log scale', (
 test('chart: one bar per turn, newest at the right, empty slots on the left, teal by the median', () => {
   const { cells } = compose(entriesOf([0.1, 0.2, 0.3, 0.9]), { ...EFFECTS_OFF, style: 'chart' }, 100)
   // The label (● BRAVO, 7 cells) and its divider come first: the 16 bars start at cell 20.
-  expect(text(cells.slice(0, 20))).toBe('Σ $1.50 │ ● BRAVO │ ')
+  expect(text(cells.slice(0, 20))).toBe('Σ $1.50 · ● BRAVO · ')
   const slots = cells.slice(20, 36)
-  expect(text(cells.slice(36, 39))).toBe(' │ ')
+  expect(text(cells.slice(36, 39))).toBe(' · ')
   expect(slots.slice(0, 12).every(c => c.cp === 0x2581 && c.fg === EMPTY_BAR)).toBe(true)
   expect(slots.slice(12).map(c => c.cp)).toEqual([0x2584, 0x2585, 0x2585, 0x2587])
   expect(slots.slice(12).map(c => c.fg)).toEqual([RAMP[0], RAMP[1], RAMP[2], RAMP[3]])
@@ -228,7 +246,7 @@ test('strip: widths follow the shares, names sit inside the blocks, a young sess
   expect(row).toContain(' EXPLAI 21%')
   expect(row).toContain('▏FIX 79%')
   // The label (● FIX, 5 cells) and its divider come first: the strip starts at cell 18.
-  expect(text(cells.slice(0, 18))).toBe('Σ $0.53 │ ● FIX │ ')
+  expect(text(cells.slice(0, 18))).toBe('Σ $0.53 · ● FIX · ')
   expect(cells[18]?.bg).toBe(FIGURES)
   // The blocks touch: the second starts with a hairline at cell 32.
   expect(cells[32]?.cp).toBe(0x258f)
@@ -374,37 +392,37 @@ test('shimmer sweeps the current turn while tokens flow', () => {
 test('narrow rows drop whole groups in order, never leaving a bar dangling or doubled', () => {
   const wide = text(reference({}, 100, true).cells)
   expect(wide).toContain('312K↓')
-  expect(wide).toContain('▲0.31 │ 312K↓')
-  expect(wide).toContain('│ ● FIX │ █')
-  expect(wide).toContain('░ │ $0.42')
+  expect(wide).toContain('▲0.31 · 312K↓')
+  expect(wide).toContain('· ● FIX · █')
+  expect(wide).toContain('░ · $0.42')
 
   const narrow = reference({}, 60, true)
   const narrowText = text(narrow.cells)
   expect(narrow.cells.length).toBe(60)
-  expect(narrowText).toContain('│ ● FIX │ █')
-  expect(narrowText).toContain('│ $0.42 ▲0.31 │ 312K↓ 2.1K↑')
+  expect(narrowText).toContain('· ● FIX · █')
+  expect(narrowText).toContain('· $0.42 ▲0.31 · 312K↓ 2.1K↑')
 
   const noTokens = text(reference({}, 50, true).cells)
-  expect(noTokens).toContain('│ $0.42 ▲0.31')
+  expect(noTokens).toContain('· $0.42 ▲0.31')
   expect(noTokens).not.toContain('312K↓')
-  expect(noTokens).not.toContain('▲0.31 │')
+  expect(noTokens).not.toContain('▲0.31 ·')
 
   const tiny = text(reference({}, 40, true).cells)
   expect(tiny).toContain('● FIX')
-  expect(tiny).toContain('│ $0.42')
+  expect(tiny).toContain('· $0.42')
   expect(tiny).not.toContain('▲0.31')
 
   // With the label dropped the divider that followed it goes too: the bar then follows the core directly.
   const noLabel = text(reference({}, 37, true).cells)
   expect(noLabel).not.toContain('FIX')
-  expect(noLabel).toContain('Σ $0.53 │ █')
-  expect(noLabel).toContain('░ │ $0.42')
+  expect(noLabel).toContain('Σ $0.53 · █')
+  expect(noLabel).toContain('░ · $0.42')
 
   // The thresholds of the sequence core, label, divider, bar (8 at the least), divider, cost, change, divider, tokens, badge:
   // 73 everything (the badge slot is blank on a still frame), 59..72 no badge, 45..58 also no tokens, 38..44 also no change,
   // 27..37 also no label, under 27 the core alone.
   for (const width of [100, 74, 73, 72, 59, 58, 45, 44, 38, 37, 27, 26, 22]) {
-    expect(text(reference({}, width, true).cells)).not.toContain('│ │')
+    expect(text(reference({}, width, true).cells)).not.toContain('· ·')
   }
   expect(text(reference({}, 59, true).cells)).toContain('312K↓')
   expect(text(reference({}, 58, true).cells)).not.toContain('312K↓')
@@ -412,39 +430,39 @@ test('narrow rows drop whole groups in order, never leaving a bar dangling or do
   expect(text(reference({}, 44, true).cells)).not.toContain('▲0.31')
   expect(text(reference({}, 38, true).cells)).toContain('● FIX')
   expect(text(reference({}, 37, true).cells)).not.toContain('FIX')
-  expect(text(reference({}, 27, true).cells)).toContain('│ $0.42')
+  expect(text(reference({}, 27, true).cells)).toContain('· $0.42')
   expect(text(reference({}, 26, true).cells)).not.toContain('$0.42')
 })
 
 test('chart and strip narrow: whole groups go, the divider after the label goes with it', () => {
   for (const style of ['chart', 'strip']) {
     const w50 = text(reference({ style }, 50, true).cells)
-    expect(w50).toContain('Σ $0.53 │ ● FIX │ ')
-    expect(w50).toContain(' │ $0.42 ▲0.31')
+    expect(w50).toContain('Σ $0.53 · ● FIX · ')
+    expect(w50).toContain(' · $0.42 ▲0.31')
     expect(w50).not.toContain('312K↓')
     const w35 = text(reference({ style }, 35, true).cells)
-    expect(w35).toContain('Σ $0.53 │ ')
-    expect(w35).toContain(' │ $0.42')
+    expect(w35).toContain('Σ $0.53 · ')
+    expect(w35).toContain(' · $0.42')
     expect(w35).not.toContain('●')
-    expect(w35).not.toContain('│ │')
+    expect(w35).not.toContain('· ·')
   }
 })
 
 test('the label setting numbered reads #n and the symbol, the running turn with its upcoming number', () => {
   const finished = text(reference({ ...EFFECTS_OFF, label: 'numbered' }, 100).cells)
-  expect(finished).toContain('Σ $0.53 │ ● #2 FIX │ █')
+  expect(finished).toContain('Σ $0.53 · ● #2 FIX · █')
   const running = text(compose(entriesOf([0.11, 0.42]), { ...EFFECTS_OFF, label: 'numbered' }, 100, { live: live() }).cells)
-  expect(running).toContain('● #3 EXPLAI │ ')
+  expect(running).toContain('● #3 EXPLAI · ')
   // The strip blocks keep the bare symbol.
   const strip = text(reference({ ...EFFECTS_OFF, label: 'numbered', style: 'strip' }, 120).cells)
-  expect(strip).toContain('● #2 FIX │ ')
+  expect(strip).toContain('● #2 FIX · ')
   expect(strip).toContain(' EXPLAI 21%')
   expect(strip).toContain('▏FIX 79%')
 })
 
 test('change off keeps one divider pair around the cost', () => {
   const row = text(reference({ ...EFFECTS_OFF, change: 'off' }, 100).cells)
-  expect(row).toContain('│ $0.42 │ 312K↓')
+  expect(row).toContain('· $0.42 · 312K↓')
   expect(row).not.toContain('▲')
 })
 
@@ -494,11 +512,11 @@ test('tokenCells with the cache percent: a gray note right after the input figur
 test('the cache percent in the row: off by default, in the tokens group when on, rolling with the eased share', () => {
   expect(text(reference(EFFECTS_OFF, 100).cells)).not.toContain('%c')
   const on = { ...EFFECTS_OFF, cachePercent: 'on' }
-  expect(text(reference(on, 100).cells)).toContain('│ 312K↓ (94%c) 2.1K↑')
+  expect(text(reference(on, 100).cells)).toContain('· 312K↓ (94%c) 2.1K↑')
   const labeled = text(reference({ ...on, tokens: 'labeled' }, 110).cells)
-  expect(labeled).toContain('│ 312K in (94% cached) · 2.1K out')
+  expect(labeled).toContain('· 312K in (94% cached) · 2.1K out')
   for (const style of ['chart', 'strip']) {
-    expect(text(reference({ ...on, style }, 120).cells)).toContain('│ 312K↓ (94%c) 2.1K↑')
+    expect(text(reference({ ...on, style }, 120).cells)).toContain('· 312K↓ (94%c) 2.1K↑')
   }
 
   // The note goes with the tokens group (and its divider): 67 keeps it, 66 drops the group, never a dangling bar.
@@ -507,7 +525,7 @@ test('the cache percent in the row: off by default, in the tokens group when on,
   const w66 = text(reference(all, 66, true).cells)
   expect(w66).not.toContain('312K')
   expect(w66).not.toContain('%c')
-  expect(w66).not.toContain('│ │')
+  expect(w66).not.toContain('· ·')
 
   // A live turn without usage shows no note.
   const empty = live({
@@ -515,7 +533,7 @@ test('the cache percent in the row: off by default, in the tokens group when on,
     costUsd: 0,
   })
   const none = text(compose([], on, 100, { live: empty }).cells)
-  expect(none).toContain('│ 0↓ 0↑')
+  expect(none).toContain('· 0↓ 0↑')
   expect(none).not.toContain('%c')
 
   // The percent follows the eased share: halfway there it reads between the old and the new value.
@@ -647,7 +665,7 @@ test('a live turn with no usage yet reads 0↓ 0↑ in dim gray', () => {
   const { cells } = compose([], EFFECTS_OFF, 100, { live: empty })
   const row = text(cells)
   expect(row).toContain('● EXPLAI')
-  expect(row).toContain('│ $0.000 │ 0↓ 0↑')
+  expect(row).toContain('· $0.000 · 0↓ 0↑')
   expect(row).not.toContain('…')
   const i = row.indexOf('0↓ 0↑')
   expect(cells.slice(i, i + 5).every(c => c.fg === SEP && c.bg === DEFAULT)).toBe(true)
@@ -656,7 +674,7 @@ test('a live turn with no usage yet reads 0↓ 0↑ in dim gray', () => {
 test('no growing note in the badge spot: the row shows the turn itself', () => {
   const options = { stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
   const growingCells = compose(entriesOf([0.625, 0.125]), options, 100, { growing: [1] }).cells
-  expect(text(growingCells)).toContain('↻ #1 EXPLAI │')
+  expect(text(growingCells)).toContain('↻ #1 EXPLAI ·')
   expect(text(growingCells)).not.toContain('↻#')
   expect(growingCells.filter(c => c.cp === 0x21bb).length).toBe(1)
   const idleCells = compose(entriesOf([0.625, 0.125]), options, 100, { growing: [] }).cells
@@ -744,8 +762,8 @@ test('the row shows the older turn a helper is still working on', () => {
 
   const older = row([2])
   const olderText = text(older)
-  expect(olderText.startsWith('Σ $1.05 │ ↻ #2 FIX │ █')).toBe(true)
-  expect(olderText).toContain('░ │ $0.80 ▲0.60 │ 312K↓ 2.1K↑')
+  expect(olderText.startsWith('Σ $1.05 · ↻ #2 FIX · █')).toBe(true)
+  expect(olderText).toContain('░ · $0.80 ▲0.60 · 312K↓ 2.1K↑')
   expect(older[10]?.cp).toBe(0x21bb)
   expect(older[10]?.fg).toBe(LIVE)
   expect(older.slice(12, 18).every(c => c.fg === LIVE)).toBe(true)
@@ -758,8 +776,8 @@ test('the row shows the older turn a helper is still working on', () => {
 
   const rest = row([])
   const restText = text(rest)
-  expect(restText.startsWith('Σ $1.05 │ ● ALPHA │ █')).toBe(true)
-  expect(restText).toContain('│ $0.050 ▼0.75 │')
+  expect(restText.startsWith('Σ $1.05 · ● ALPHA · █')).toBe(true)
+  expect(restText).toContain('· $0.050 ▼0.75 ·')
   const restAt = rest.findIndex(c => c.cp === 0x2588)
   expect(rest.slice(restAt, restAt + 17).every(c => c.cp === 0x2588 && c.fg === FIGURES)).toBe(true)
   expect(rest.slice(restAt + 17, restAt + 49).every(c => c.cp === 0x2591)).toBe(true)
@@ -767,12 +785,12 @@ test('the row shows the older turn a helper is still working on', () => {
 
   // The newest turn growing: the marker, but no number.
   const newest = row([3])
-  expect(text(newest).startsWith('Σ $1.05 │ ↻ ALPHA │ █')).toBe(true)
+  expect(text(newest).startsWith('Σ $1.05 · ↻ ALPHA · █')).toBe(true)
   const newestAt = newest.findIndex(c => c.cp === 0x2588)
   expect(newest.slice(newestAt, newestAt + 17).every(c => c.cp === 0x2588 && c.fg === LIVE)).toBe(true)
 
-  expect(text(row([2], { ...EFFECTS_OFF, label: 'prompt' }))).toContain('↻ #2 "fix the login bug" │')
-  expect(text(row([2], { ...EFFECTS_OFF, label: 'number' }))).toContain('↻ #2 │')
+  expect(text(row([2], { ...EFFECTS_OFF, label: 'prompt' }))).toContain('↻ #2 "fix the login bug" ·')
+  expect(text(row([2], { ...EFFECTS_OFF, label: 'number' }))).toContain('↻ #2 ·')
 })
 
 test('chart: the focused older bar is lavender', () => {
@@ -809,8 +827,8 @@ test('strip: the focused older block is lavender', () => {
   expect(far.slice(firstRun.start, firstRun.end + 1).every(c => c.bg === LIVE_FILL)).toBe(true)
   expect(far.filter(c => c.bg === LIVE_FILL).length).toBe(firstRun.end - firstRun.start + 1)
   expect(text(far)).not.toContain('ALPHA')
-  expect(text(far)).toContain('↻ #1 EXPLAI │ ')
-  expect(text(far)).toContain('│ $0.10 │ 312K↓')
+  expect(text(far)).toContain('↻ #1 EXPLAI · ')
+  expect(text(far)).toContain('· $0.10 · 312K↓')
 })
 
 test('windowEntries: the newest turns, the active and focused ones keeping a slot', () => {
@@ -1150,7 +1168,7 @@ test('the live strip block has no dot, keeps lavender and still shimmers', () =>
     expect(blockCells(resting).length).toBeGreaterThan(0)
     expect(blockCells(resting).every(c => c.bg === LIVE_FILL)).toBe(true)
     // The one dot is the label's, before the strip.
-    expect(text(resting.slice(10, 21))).toBe('● EXPLAI │ ')
+    expect(text(resting.slice(10, 21))).toBe('● EXPLAI · ')
 
     const flowing = createAnim()
     syncTargets(flowing, scene, settings, 's')
@@ -1284,4 +1302,129 @@ test('the chart never rescales: a pricier turn does not move the other bars', ()
   const beside = compose(entriesOf([0.1, 5]), options, 100, { ledger: 5.1 }).cells
   expect(beside[32]?.cp).toBe(0x2584)
   expect(beside[33]?.cp).toBe(0x2588)
+})
+
+test('normalizeSettings: every meter, chart and strip style id is kept', () => {
+  for (const id of METER_STYLE_IDS) expect(normalizeSettings({ meterStyle: id }).meterStyle).toBe(id)
+  for (const id of CHART_STYLE_IDS) expect(normalizeSettings({ chartStyle: id }).chartStyle).toBe(id)
+  for (const id of STRIP_STYLE_IDS) expect(normalizeSettings({ stripStyle: id }).stripStyle).toBe(id)
+  expect(METER_STYLE_IDS.length).toBe(14)
+})
+
+test('meterBar: each style on 10 cells at 0.55, at rest', () => {
+  const X = 0x00afaf
+  const cps = (cells: Cell[]): number[] => cells.map(c => c.cp)
+  const rep = (cp: number, n: number): number[] => Array.from({ length: n }, () => cp)
+
+  const para = meterBar(10, 0.55, X, false, false, 'parallelogram')
+  expect(cps(para.cells)).toEqual([...rep(0x25b0, 6), ...rep(0x25b1, 4)])
+  expect(para.cells.slice(0, 6).every(c => c.fg === X)).toBe(true)
+  expect(para.cells.slice(6).every(c => c.fg === SEP)).toBe(true)
+  expect([para.from, para.to]).toEqual([0, 6])
+
+  const smooth = meterBar(10, 0.55, X, false, false, 'smooth')
+  expect(cps(smooth.cells)).toEqual([...rep(0x2588, 5), 0x258c, ...rep(0x2591, 4)])
+  expect(smooth.to).toBe(6)
+  expect(cps(meterBar(10, 0.55, X, true, false, 'smooth').cells)).toEqual(cps(smooth.cells))
+
+  const bare = meterBar(10, 0.55, X, false, false, 'smooth-bare')
+  expect(cps(bare.cells)).toEqual([...rep(0x2588, 5), 0x258c, ...rep(0x20, 4)])
+
+  const heavy = meterBar(10, 0.55, X, false, false, 'heavy')
+  expect(cps(heavy.cells)).toEqual(rep(0x2501, 10))
+  expect(heavy.cells.slice(0, 6).every(c => c.fg === X)).toBe(true)
+  expect(heavy.cells.slice(6).every(c => c.fg === TRACK_HEAVY)).toBe(true)
+
+  const ascii = meterBar(10, 0.55, X, false, false, 'ascii')
+  expect(cps(ascii.cells)).toEqual([0x5b, ...rep(0x23, 4), ...rep(0x2d, 4), 0x5d])
+  expect(ascii.cells[0]?.fg).toBe(SEP)
+  expect(ascii.cells[9]?.fg).toBe(SEP)
+  expect([ascii.from, ascii.to]).toEqual([1, 5])
+
+  const arrow = meterBar(10, 0.55, X, false, false, 'arrow')
+  expect(cps(arrow.cells)).toEqual([0x5b, ...rep(0x3d, 3), 0x3e, ...rep(0x20, 4), 0x5d])
+  expect([arrow.from, arrow.to]).toEqual([1, 5])
+
+  // No eighth glyph in a whole-cell style, also while the bar moves.
+  expect(cps(meterBar(10, 0.55, X, true, false, 'parallelogram').cells)).toEqual(cps(para.cells))
+
+  for (const id of METER_STYLE_IDS) {
+    const bar = meterBar(10, 0.55, X, false, false, id)
+    expect(bar.cells.length).toBe(10)
+    expect(bar.cells.every(c => c.bg === DEFAULT)).toBe(true)
+    const least = meterBar(10, 0, X, false, true, id)
+    expect(least.cells.length).toBe(10)
+    expect(least.to - least.from).toBe(1)
+  }
+})
+
+test('meter, still: the dividers are dots', () => {
+  const { cells } = reference(EFFECTS_OFF, 100)
+  expect(text(cells).startsWith('Σ $0.53 · ● FIX · █')).toBe(true)
+  const dots = cells.filter(c => c.cp === 0x00b7)
+  expect(dots.length).toBe(4)
+  expect(dots.every(c => c.fg === DIVIDER && c.bg === DEFAULT)).toBe(true)
+})
+
+test('meterStyle parallelogram in the row', () => {
+  const { cells } = reference({ ...EFFECTS_OFF, meterStyle: 'parallelogram' }, 100)
+  expect(cells.slice(18, 54).every(c => c.cp === 0x25b0 && c.fg === FIGURES)).toBe(true)
+  expect(cells.slice(54, 67).every(c => c.cp === 0x25b1 && c.fg === SEP)).toBe(true)
+})
+
+test('chart styles: braille and shade glyphs, the empty slots dim, the colors as before', () => {
+  const rows = (chartStyle: string): Cell[] =>
+    compose(entriesOf([0.1, 0.2, 0.3, 0.9]), { ...EFFECTS_OFF, style: 'chart', chartStyle }, 100).cells.slice(20, 36)
+  const braille = rows('braille')
+  expect(braille.slice(0, 12).every(c => c.cp === 0x28c0 && c.fg === EMPTY_BAR)).toBe(true)
+  expect(braille.slice(12).map(c => c.cp)).toEqual([0x28e4, 0x28e6, 0x28e6, 0x28f7])
+  expect(braille.slice(12).map(c => c.fg)).toEqual([RAMP[0], RAMP[1], RAMP[2], RAMP[3]])
+  const shade = rows('shade')
+  expect(shade.slice(0, 12).every(c => c.cp === 0x2591 && c.fg === EMPTY_BAR)).toBe(true)
+  expect(shade.slice(12).map(c => c.cp)).toEqual([0x2592, 0x2593, 0x2593, 0x2588])
+  expect(shade.slice(12).map(c => c.fg)).toEqual([RAMP[0], RAMP[1], RAMP[2], RAMP[3]])
+})
+
+test('strip glyph styles: cells in the block color, a hollow lead cell, no names, no backgrounds', () => {
+  const lettersIn = (cells: Cell[]): boolean => /[A-Za-z]/.test(text(cells))
+  const para = reference({ ...EFFECTS_OFF, style: 'strip', stripStyle: 'parallelogram' }, 120).cells
+  expect(para.slice(18, 32).every(c => c.cp === 0x25b0 && c.fg === FIGURES)).toBe(true)
+  expect(para[32]?.cp).toBe(0x25b1)
+  expect(para[32]?.fg).toBe(FIGURES)
+  expect(para.slice(33, 87).every(c => c.cp === 0x25b0 && c.fg === FIGURES)).toBe(true)
+  expect(para.every(c => c.bg === DEFAULT)).toBe(true)
+  expect(lettersIn(para.slice(18, 87))).toBe(false)
+
+  const ascii = reference({ ...EFFECTS_OFF, style: 'strip', stripStyle: 'ascii' }, 120).cells
+  expect(ascii.slice(18, 32).every(c => c.cp === 0x23)).toBe(true)
+  expect(ascii[32]?.cp).toBe(0x7c)
+  expect(ascii.slice(33, 87).every(c => c.cp === 0x23)).toBe(true)
+  expect(ascii.every(c => c.bg === DEFAULT)).toBe(true)
+
+  // Four blocks over ten equal turns: three lead cells.
+  const turns = Array.from({ length: 10 }, (_, i) => entry({ n: i + 1, symbol: 'TURN', costUsd: 0.1 }))
+  const four = compose(turns, { ...EFFECTS_OFF, style: 'strip', stripStyle: 'parallelogram', stripTurns: '4' }, 110).cells
+  expect(four.filter(c => c.cp === 0x25b1).length).toBe(3)
+  const fourAscii = compose(turns, { ...EFFECTS_OFF, style: 'strip', stripStyle: 'ascii', stripTurns: '4' }, 110).cells
+  expect(fourAscii.filter(c => c.cp === 0x7c).length).toBe(3)
+})
+
+test('meter shimmer and bump stay inside the frame', () => {
+  const settings = normalizeSettings({ stock: 'off', celebrate: 'off', grow: 'off', meterStyle: 'ascii' })
+  const scene: Scene = { entries: entriesOf([0.11]), live: live(), ledger: 0.16, growing: [] }
+  const anim = createAnim()
+  syncTargets(anim, scene, settings, 's')
+  markFlow(anim)
+  anim.bumpUntil = 5
+  const cells = composeRow(scene, anim, settings, 100, false).cells
+  const open = cells.findIndex(c => c.cp === 0x5b)
+  const close = cells.findIndex(c => c.cp === 0x5d)
+  expect(open).toBeGreaterThan(0)
+  expect(close).toBeGreaterThan(open)
+  expect(cells[open]?.fg).toBe(SEP)
+  expect(cells[close]?.fg).toBe(SEP)
+  const hashes = cells.slice(open + 1, close).filter(c => c.cp === 0x23)
+  expect(hashes.length).toBeGreaterThan(1)
+  expect(hashes.at(-1)?.fg).toBe(WHITE)
+  expect(hashes.slice(0, -1).every(c => c.fg !== WHITE)).toBe(true)
 })
