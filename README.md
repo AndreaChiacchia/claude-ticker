@@ -1,6 +1,6 @@
 # Claude-Ticker
 
-![version](https://img.shields.io/badge/version-0.2.1-blue)
+![version](https://img.shields.io/badge/version-0.3.0-blue)
 
 A mod for the Claude Code CLI that draws a live cost row under the prompt, below the [claudepeeker](https://github.com/AndreaChiacchia/claude-peeker) status line and the claudespotter subagent rows. It shows what each turn spends (tokens in and out, and cost) while it runs, colored against the rest of the session, so you can see which prompts are expensive. Claudepeeker shows the overall limits; this shows each turn.
 
