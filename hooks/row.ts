@@ -162,7 +162,7 @@ export type StripBlock = {
 const minWidth = (b: StripBlock): number => (b.kind === 'live' ? MIN_LIVE : b.kind === 'turn' ? MIN_TURN : MIN_LEAVING)
 
 /**
- * The blocks of a strip `S` cells wide, in the order given (leaving blocks first, the running turn last). The blocks
+ * The blocks of a strip `S` cells wide, in the order given (finished and leaving blocks by turn number, the running turn last). The blocks
  * touch (each later block starts with a hairline that belongs to its own width). Widths follow `shown(key, target)`, the eased value of each block (the target by
  * default). A block under its minimum takes cells, one at a time, from the widest block that stays at or above its own minimum.
  */
@@ -198,6 +198,31 @@ export function stripLayout(
   }
 
   return blocks
+}
+
+/**
+ * The finished turns a window of `count` slots shows: the newest ones, except that the focused turn and the turns a
+ * background helper is still working on keep a slot even when older (at most `count - 1` of them, so the newest turn
+ * always stays), in turn order.
+ */
+export function windowEntries(entries: Entry[], growing: readonly number[], focusN: number | null, count: number): Entry[] {
+  const size = Math.min(count, entries.length)
+  if (size <= 0) return []
+  const known = new Set(entries.map(e => e.n))
+  const candidates: number[] = []
+  const consider = (n: number): void => {
+    if (known.has(n) && !candidates.includes(n)) candidates.push(n)
+  }
+  if (focusN !== null) consider(focusN)
+  for (let i = growing.length - 1; i >= 0; i--) consider(growing[i] ?? Number.NaN)
+  const pinned = new Set(candidates.slice(0, Math.max(0, count - 1)))
+  const taken = new Set<number>()
+  for (let i = entries.length - 1; i >= 0 && pinned.size + taken.size < size; i--) {
+    const n = entries[i]?.n
+    if (n !== undefined && !pinned.has(n)) taken.add(n)
+  }
+
+  return entries.filter(e => pinned.has(e.n) || taken.has(e.n))
 }
 
 /**
@@ -542,19 +567,19 @@ function chartVisual(c: Ctx): Visual {
     build: C => {
       const k = Math.min(c.costs.length, c.live ? C - 1 : C)
       // The focused finished turn (a helper still at work) is lavender like a running one; every other bar keeps its ramp color.
-      const slots: { n: number; value: number; color: number; isLive: boolean; isFocus: boolean }[] = c.entries
-        .slice(c.entries.length - k)
-        .map(e => {
-          const isFocus = c.isGrowing && e.n === c.n
+      // The focused turn and the turns a helper still works on keep their bar even when older (see `windowEntries`).
+      const picked = windowEntries(c.entries, c.growing, c.live === null ? c.n : null, k)
+      const slots: { n: number; value: number; color: number; isLive: boolean; isFocus: boolean }[] = picked.map(e => {
+        const isFocus = c.isGrowing && e.n === c.n
 
-          return {
-            n: e.n,
-            value: e.costUsd,
-            color: isFocus ? LIVE : rampColor(rampFor(e.costUsd, c.costs)),
-            isLive: false,
-            isFocus,
-          }
-        })
+        return {
+          n: e.n,
+          value: e.costUsd,
+          color: isFocus ? LIVE : rampColor(rampFor(e.costUsd, c.costs)),
+          isLive: false,
+          isFocus,
+        }
+      })
       if (c.live) slots.push({ n: c.n, value: c.turnTarget, color: LIVE, isLive: true, isFocus: false })
       const cells: Cell[] = []
       for (let i = 0; i < C - slots.length; i++) cells.push(glyph(GLYPH.bars[1] ?? 0x2581, EMPTY_BAR))
@@ -588,13 +613,13 @@ function stripLabel(b: StripBlock, pct: number, labelsOn: boolean): string | nul
   return candidates.find(t => b.width >= Array.from(t).length + 2) ?? null
 }
 
-/** The turn numbers whose block is still shrinking out of the strip window (older than `firstN`); settled ones are forgotten. */
-function leavingTurns(c: Ctx, firstN: number): number[] {
+/** The turn numbers whose block is still shrinking out of the strip (a finished turn no longer shown); settled ones are forgotten. */
+function leavingTurns(c: Ctx, shown: ReadonlySet<number>): number[] {
   const out: number[] = []
   for (const key of Array.from(c.anim.tweens.keys())) {
     const m = /^s:(\d+)$/.exec(key)
     const n = m?.[1] === undefined ? Number.NaN : Number(m[1])
-    if (!(n < firstN)) continue
+    if (!(n <= c.lastN && !shown.has(n))) continue
     const value = tweenTo(c.anim, key, 0, true)
     if (value < 0.0005 && !isTweening(c.anim, key)) continue
     c.keys.add(key)
@@ -609,17 +634,27 @@ function stripVisual(c: Ctx): Visual {
     min: 10,
     max: 512,
     build: S => {
-      // The window: the last `stripTurns` turns, the running one included, as many as fit. The blocks touch and each
-      // later one starts with a hairline.
+      // The window: the last `stripTurns` turns, the running one included, as many as fit; a turn a helper still works
+      // on (or the focused one) keeps its slot even when older (see `windowEntries`). The blocks touch and each later
+      // one starts with a hairline.
       const K = Math.min(c.settings.stripTurns, c.entries.length + (c.live ? 1 : 0))
       const k = Math.min(K, S - 1)
       const finished = c.live ? Math.max(0, k - 1) : k
-      const shownEntries = finished === 0 ? [] : c.entries.slice(-finished)
+      const shownEntries = windowEntries(c.entries, c.growing, c.live === null ? c.n : null, finished)
+      // Whether the strip was drawn before: only then does a finished turn that newly enters it grow in.
+      const hadStrip = Array.from(c.anim.tweens.keys()).some(key => /^s:\d+$/.test(key))
+      const shown = new Set(shownEntries.map(e => e.n))
       const items: StripItem[] = []
       if (c.useTween) {
-        for (const n of leavingTurns(c, shownEntries[0]?.n ?? c.lastN + 1)) items.push({ kind: 'leaving', n, symbol: '', value: 0 })
+        for (const n of leavingTurns(c, shown)) items.push({ kind: 'leaving', n, symbol: '', value: 0 })
       }
       for (const e of shownEntries) items.push({ kind: 'turn', n: e.n, symbol: e.symbol, value: e.costUsd })
+      items.sort((a, b) => a.n - b.n)
+      if (c.useTween && hadStrip) {
+        for (const item of items) {
+          if (item.kind === 'turn' && !c.anim.tweens.has(`s:${item.n}`)) tweenTo(c.anim, `s:${item.n}`, 0, true)
+        }
+      }
       if (c.live) items.push({ kind: 'live', n: c.n, symbol: c.live.symbol, value: c.turnTarget })
       const blocks = stripLayout(items, S, (key, target) => ease(c, key, target))
       const total = blocks.reduce((s, b) => (b.kind === 'leaving' ? s : s + b.value), 0)

@@ -40,7 +40,7 @@ import {
 } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { formatCost, formatTokens, logShare } from '../hooks/format'
-import { composeRow, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells } from '../hooks/row'
+import { composeRow, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells, windowEntries } from '../hooks/row'
 import type { StripItem, TokenFigure } from '../hooks/row'
 
 const EFFECTS_OFF = { reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', grow: 'off' }
@@ -801,11 +801,96 @@ test('strip: the focused older block is lavender', () => {
   const idle = compose(entriesOf(C3), options, 120, { growing: [] }).cells
   expect(idle.some(c => c.bg === LIVE_FILL)).toBe(false)
 
-  // Outside the window: the strip stays the last turns in order; the label and the figures say which turn the row is on.
+  // Older than the window: the block keeps its slot at the left, lavender; the oldest recent turn makes room.
   const far = compose(entriesOf(Array.from({ length: 10 }, () => 0.1)), { ...options, stripTurns: '8' }, 120, { growing: [1] }).cells
-  expect(far.some(c => c.bg === LIVE_FILL)).toBe(false)
+  const runs = bgRuns(far, 0, far.length - 1)
+  expect(runs.length).toBe(8)
+  const firstRun = runs[0] ?? { start: 0, end: 0 }
+  expect(far.slice(firstRun.start, firstRun.end + 1).every(c => c.bg === LIVE_FILL)).toBe(true)
+  expect(far.filter(c => c.bg === LIVE_FILL).length).toBe(firstRun.end - firstRun.start + 1)
+  expect(text(far)).not.toContain('ALPHA')
   expect(text(far)).toContain('↻ #1 EXPLAI │ ')
   expect(text(far)).toContain('│ $0.10 │ 312K↓')
+})
+
+test('windowEntries: the newest turns, the active and focused ones keeping a slot', () => {
+  const ten = entriesOf(Array.from({ length: 10 }, () => 0.1))
+  const ns = (growing: number[], focusN: number | null, count: number, entries: Entry[] = ten): number[] =>
+    windowEntries(entries, growing, focusN, count).map(e => e.n)
+
+  expect(ns([], null, 8)).toEqual([3, 4, 5, 6, 7, 8, 9, 10])
+  // In the window already: unchanged.
+  expect(ns([5], 5, 8)).toEqual([3, 4, 5, 6, 7, 8, 9, 10])
+  expect(ns([1], 1, 8)).toEqual([1, 4, 5, 6, 7, 8, 9, 10])
+  // Growing alone pins, as while a turn runs.
+  expect(ns([1], null, 8)).toEqual([1, 4, 5, 6, 7, 8, 9, 10])
+  // Focus alone pins: the 2 s hold after a helper finished.
+  expect(ns([], 2, 8)).toEqual([2, 4, 5, 6, 7, 8, 9, 10])
+  // At most count - 1 pinned, the most recent activity first.
+  expect(ns([1, 2, 3], null, 3)).toEqual([2, 3, 10])
+  // The focused turn first.
+  expect(ns([1, 2, 3], 1, 3)).toEqual([1, 3, 10])
+  // Unknown numbers are ignored.
+  expect(ns([42], null, 8)).toEqual([3, 4, 5, 6, 7, 8, 9, 10])
+  expect(ns([1], 1, 0)).toEqual([])
+  expect(ns([1], 1, 8, entriesOf([0.1, 0.2]))).toEqual([1, 2])
+})
+
+test('chart: an active turn older than the chart keeps its bar, at the left and lavender', () => {
+  const options = { ...EFFECTS_OFF, style: 'chart', chartBars: '8' }
+  const bars = (cells: Cell[]) => cells.filter(c => c.cp >= 0x2581 && c.cp <= 0x2588)
+  const twenty = entriesOf(Array.from({ length: 20 }, () => 0.1))
+  const active = bars(compose(twenty, options, 100, { growing: [2] }).cells)
+  expect(active.length).toBe(8)
+  expect(active[0]?.fg).toBe(LIVE)
+  expect(active.filter(c => c.fg === LIVE).length).toBe(1)
+  const idle = bars(compose(twenty, options, 100, { growing: [] }).cells)
+  expect(idle.length).toBe(8)
+  expect(idle.some(c => c.fg === LIVE)).toBe(false)
+})
+
+test('strip: an active older turn keeps its block while a turn runs', () => {
+  const options = { ...EFFECTS_OFF, style: 'strip', stripTurns: '8' }
+  const costs = [0.9, ...Array.from({ length: 9 }, () => 0.1)]
+  const cells = compose(entriesOf(costs), options, 120, { live: live({ costUsd: 0.1 }), growing: [1] }).cells
+  const runs = bgRuns(cells, 0, cells.length - 1)
+  expect(runs.length).toBe(8)
+  const [first, second] = runs
+  expect((first?.end ?? 0) - (first?.start ?? 0)).toBeGreaterThan((second?.end ?? 0) - (second?.start ?? 0))
+  expect(cells[runs.at(-1)?.start ?? 0]?.bg).toBe(LIVE_FILL)
+  expect(cells[first?.start ?? 0]?.bg).not.toBe(LIVE_FILL)
+})
+
+test('strip: a turn whose helper finished stays through the hold, then shrinks away in place', () => {
+  const settings = normalizeSettings({ reacts: 'off', stock: 'off', celebrate: 'off', shimmer: 'off', style: 'strip', stripTurns: '8' })
+  const entries = entriesOf(Array.from({ length: 10 }, () => 0.1))
+  const working: Scene = { entries, live: null, ledger: null, growing: [1] }
+  const done: Scene = { entries, live: null, ledger: null, growing: [] }
+  const anim = createAnim()
+  syncTargets(anim, working, settings, 's')
+  const first = composeRow(working, anim, settings, 120, false).cells
+  expect(bgRuns(first, 0, first.length - 1).length).toBe(8)
+  expect(anim.tweens.has('s:1')).toBe(true)
+
+  // The helper stops at tick 1: the row stays on #1 for FOCUS_HOLD frames, then moves to #10 and #1 shrinks away.
+  const counts: number[] = []
+  let shrinking: { start: number; end: number }[] = []
+  let settled: { start: number; end: number }[] = []
+  for (let t = 1; t <= 30; t++) {
+    anim.tick = t
+    syncTargets(anim, done, settings, 's')
+    const { cells } = composeRow(done, anim, settings, 120, false)
+    const runs = bgRuns(cells, 0, cells.length - 1)
+    counts.push(runs.length)
+    if (t === 1 + FOCUS_HOLD) shrinking = runs
+    if (t === 30) settled = runs
+  }
+  expect(counts).toEqual([...Array.from({ length: FOCUS_HOLD }, () => 8), 9, 9, 9, 9, 8, 8, 8, 8, 8, 8])
+  expect(isSettled(anim)).toBe(true)
+  expect(anim.tweens.has('s:1')).toBe(false)
+  // #3 grew in: at the first transition frame it is the narrowest run after the shrinking #1, later it is a full block.
+  const width = (r: { start: number; end: number } | undefined): number => (r === undefined ? 0 : r.end - r.start + 1)
+  expect(width(shrinking[1])).toBeLessThan(width(settled[0]))
 })
 
 test('a focus switch snaps the cost, held 2 s, then it rolls', () => {
