@@ -28,7 +28,7 @@ The three rows at the bottom are the same session in the three styles: the meter
   - `reacts`: the row moves on every step of a turn. Each tool call flashes its name at the right edge and bumps the bar, and the live marker pulses.
   - `stock`: costs and the token counts roll like an odometer. The Σ and cost digits that change flash (green going up, red going down); the token counts step toward their new value like the claudespotter token figure, their changed digits flashing (warm white going up, ice blue going down). The ▲/▼ change switches at once.
   - `celebrate`: a cheap, well-cached turn sparkles green, and a new session high pulses red (`‼ NEW HIGH ‼`).
-  - `shimmer`: while Claude streams a response, the current turn shimmers: a light sweep runs over the filled part of the meter and over the live block of the strip, and the live bar of the chart pulses.
+  - `shimmer`: while Claude streams a response, the current turn shimmers: the filled part of the meter and the live block of the strip glow softly with a light gliding across them, and the live bar of the chart breathes. It fades in when tokens start and out when they stop.
   - `grow`: smooth changes. The meter bar, the chart bars and the strip blocks ease to their new size and color in about 0.4 s instead of jumping.
 - **One figure set per turn, in every style:** `FIX · <bar> · $0.42 ▲0.31 · 312K↓ 2.1K↑`, with `·` dividers between the name, the visual, the cost and change, and the tokens.
   - `FIX` names the turn.

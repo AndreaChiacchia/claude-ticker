@@ -1,5 +1,5 @@
 import type { Entry, Live } from '../types'
-import { isTweening, pickFocus, pruneTweens, tokenText, turnUsage, tweenColorTo, tweenTo } from './anim'
+import { flowFade, isTweening, pickFocus, pruneTweens, tokenText, turnUsage, tweenColorTo, tweenTo } from './anim'
 import type { Anim, Odo, Scene } from './anim'
 import {
   CHEAP,
@@ -104,17 +104,34 @@ export const TIP: readonly number[] = [0x258f, 0x258e, 0x258d, 0x258c, 0x258b, 0
 
 // ---- shimmer ------------------------------------------------------------------------------------
 
-/** How far the cell `i` of an element `w` cells wide is lightened by the sweep at `tick` (a 3-cell highlight, then a pause). */
-export function sweepAmount(i: number, w: number, tick: number): number {
-  const head = tick % (w + 6)
-  const d = Math.abs(i - head)
+/** While an element shimmers it is lifted this much all over, so the moving light reads as part of it. */
+const SHIMMER_GLOW = 0.1
+/** The light at the middle of the sweep, on top of the glow. */
+const SWEEP_PEAK = 0.4
+/** The frames the sweep rests between two passes. */
+const SWEEP_REST = 6
+/** The frames of one breath of the chart bar (1.2 s). */
+const PULSE_FRAMES = 12
 
-  return d === 0 ? 0.55 : d === 1 ? 0.3 : 0
+/**
+ * How far the cell `i` of an element `w` cells wide is lightened at `tick`: the glow, plus a soft band (a fifth of the
+ * element, 1.5 to 6 cells each side, cosine falloff) that glides in from off the left edge and out past the right one
+ * at about 1.2 cells a frame, then rests.
+ */
+export function sweepAmount(i: number, w: number, tick: number): number {
+  const half = Math.min(6, Math.max(1.5, w * 0.2))
+  const travel = w - 1 + 2 * half
+  const frames = Math.min(30, Math.max(8, Math.ceil(travel / 1.2)))
+  const t = tick % (frames + SWEEP_REST)
+  if (t >= frames) return SHIMMER_GLOW
+  const d = Math.abs(i - (-half + (travel * t) / frames)) / half
+
+  return SHIMMER_GLOW + (d < 1 ? (SWEEP_PEAK * (1 + Math.cos(Math.PI * d))) / 2 : 0)
 }
 
-/** The lightening of the single chart bar at `tick`: a 4-frame pulse. */
+/** The lightening of the single chart bar at `tick`: a slow breath between the glow and the glow plus the peak. */
 export function pulseAmount(tick: number): number {
-  return [0, 0.3, 0.55, 0.3][tick % 4] ?? 0
+  return SHIMMER_GLOW + (SWEEP_PEAK * (1 - Math.cos((2 * Math.PI * tick) / PULSE_FRAMES))) / 2
 }
 
 // ---- the small parts ----------------------------------------------------------------------------
@@ -385,6 +402,8 @@ type Ctx = {
   isBump: boolean
   /** Tokens are streaming and `shimmer` is on. */
   isFlowing: boolean
+  /** The strength of the running turn's shimmer (0..1): it fades in and out with the flow. */
+  flowFade: number
   /** Sizes and colors ease (a moving frame with `grow` on). */
   useTween: boolean
   /** The tween keys this frame used, so the others can be forgotten. */
@@ -439,6 +458,7 @@ function makeCtx(scene: Scene, anim: Anim, settings: Settings, still: boolean): 
     isEmptyLive: live !== null && tokensIn + tokensOut === 0,
     isBump: settings.effects.reacts && !still && (live !== null || isGrowing) && anim.tick < anim.bumpUntil,
     isFlowing: settings.effects.shimmer && !still && live !== null && anim.tick < anim.flowUntil,
+    flowFade: settings.effects.shimmer && !still && live !== null ? flowFade(anim) : 0,
     useTween: !still && settings.effects.grow,
     keys: new Set(),
   }
@@ -463,6 +483,11 @@ function easeColor(c: Ctx, key: string, target: number): number {
 /** True when the finished turn `n` shimmers because a background helper is still adding to it. */
 function growShimmer(c: Ctx, n: number): boolean {
   return c.settings.effects.shimmer && !c.still && c.growing.includes(n)
+}
+
+/** The strength of the shimmer on the running turn (`n` null) or the finished turn `n` (0..1). */
+function shimmerOf(c: Ctx, n: number | null): number {
+  return n === null ? (c.isFlowing ? c.flowFade : 0) : growShimmer(c, n) ? 1 : 0
 }
 
 /** The money text as cells; digits at or after the odometer's flash point take the flash color. */
@@ -598,10 +623,11 @@ function meterVisual(c: Ctx): Visual {
       const fillTarget = c.live !== null || c.isGrowing ? LIVE : rampColor(rampFor(c.turnTarget, c.costs))
       const fill = easeColor(c, `c:meter:${c.n}`, fillTarget)
       const { cells: bar, from, to } = meterBar(B, f, fill, isMoving, c.turnTarget > 0, c.settings.meterStyle)
-      if (c.live !== null ? c.isFlowing : growShimmer(c, c.n)) {
+      const shine = shimmerOf(c, c.live !== null ? null : c.n)
+      if (shine > 0) {
         for (let i = from; i < to; i++) {
           const cell = bar[i]
-          if (cell) bar[i] = { ...cell, fg: lighten(cell.fg, sweepAmount(i - from, to - from, c.anim.tick)) }
+          if (cell) bar[i] = { ...cell, fg: lighten(cell.fg, shine * sweepAmount(i - from, to - from, c.anim.tick)) }
         }
       }
       if (c.isBump && to > from) {
@@ -642,14 +668,9 @@ function chartVisual(c: Ctx): Visual {
       for (const s of slots) {
         const r = ease(c, `chart:${s.n}`, logShare(s.value))
         let fg = easeColor(c, `c:chart:${s.n}`, s.color)
-        if (s.isLive) {
-          if (c.isBump) fg = WHITE
-          else if (c.isFlowing) fg = lighten(fg, pulseAmount(c.anim.tick))
-        } else if (s.isFocus && c.isBump) {
-          fg = WHITE
-        } else if (growShimmer(c, s.n)) {
-          fg = lighten(fg, pulseAmount(c.anim.tick))
-        }
+        const shine = shimmerOf(c, s.isLive ? null : s.n)
+        if ((s.isLive || s.isFocus) && c.isBump) fg = WHITE
+        else if (shine > 0) fg = lighten(fg, shine * pulseAmount(c.anim.tick))
         const level = s.value <= 0 ? 0 : Math.min(8, Math.max(1, Math.round(r * 8)))
         cells.push(level === 0 ? glyph(cs.empty, EMPTY_BAR) : glyph(cs.levels[level - 1] ?? cs.empty, fg))
       }
@@ -731,16 +752,15 @@ function stripVisual(c: Ctx): Visual {
               : rampColor(rampFor(b.target, c.costs))
         let color = easeColor(c, `c:${b.key}`, base)
         if ((b.kind === 'live' || isFocus) && c.isBump) color = LIVE_BUMP
-        const shimmering = b.kind === 'live' ? c.isFlowing : b.kind === 'turn' && growShimmer(c, b.n)
+        const shine = b.kind === 'live' ? shimmerOf(c, null) : b.kind === 'turn' ? shimmerOf(c, b.n) : 0
+        const shade = (j: number): number => (shine > 0 ? lighten(color, shine * sweepAmount(j, b.width, c.anim.tick)) : color)
         let block: Cell[]
         if (ss.fill === null) {
           // Background blocks: the color is the cells' background, the name sits inside where it fits.
           block = blank(b.width, color)
-          if (shimmering) {
-            block.forEach((cell, j) => {
-              cell.bg = lighten(color, sweepAmount(j, b.width, c.anim.tick))
-            })
-          }
+          block.forEach((cell, j) => {
+            cell.bg = shade(j)
+          })
           const pct = total > 0 ? Math.round((b.value / total) * 100) : 0
           const label = stripLabel(b, pct, c.settings.stripLabels)
           if (label !== null) {
@@ -757,7 +777,7 @@ function stripVisual(c: Ctx): Visual {
           const fillCp = ss.fill
           block = []
           for (let j = 0; j < b.width; j++) {
-            block.push(glyph(fillCp, shimmering ? lighten(color, sweepAmount(j, b.width, c.anim.tick)) : color))
+            block.push(glyph(fillCp, shade(j)))
           }
           // The hollow lead cell at the left edge of every block after the first marks the boundary.
           const first = block[0]

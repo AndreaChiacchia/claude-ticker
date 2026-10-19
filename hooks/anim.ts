@@ -46,6 +46,8 @@ export type Anim = {
   cheapFiredFor: number
   /** Tokens are flowing (a streamed chunk arrived) until this tick. */
   flowUntil: number
+  /** The tick the current flow began (the shimmer fades in from here). */
+  flowSince: number
   tweens: Map<string, Tween>
   /** The turn the row describes (see `pickFocus`); null until the first sync. */
   focus: Focus | null
@@ -73,6 +75,7 @@ export function createAnim(tick = 0): Anim {
     entryCosts: new Map(),
     cheapFiredFor: 0,
     flowUntil: 0,
+    flowSince: 0,
     tweens: new Map(),
     focus: null,
   }
@@ -168,7 +171,15 @@ export function flashTool(anim: Anim, tool: string): void {
 
 /** A streamed chunk arrived: the current turn shimmers for the next 5 frames (0.5 s). */
 export function markFlow(anim: Anim): void {
+  if (anim.tick >= anim.flowUntil) anim.flowSince = anim.tick
   anim.flowUntil = anim.tick + 5
+}
+
+/** How strong the shimmer of a flow is at this tick (0..1): it fades in over its first 3 frames and out over its last 3. */
+export function flowFade(anim: Anim): number {
+  if (anim.tick >= anim.flowUntil) return 0
+
+  return Math.min(1, (anim.tick - anim.flowSince + 1) / 3, (anim.flowUntil - anim.tick) / 3)
 }
 
 // ---- easing -------------------------------------------------------------------------------------

@@ -42,7 +42,18 @@ import {
 } from '../hooks/cells'
 import type { Cell } from '../hooks/cells'
 import { formatCost, formatTokens, logShare } from '../hooks/format'
-import { composeRow, meterBar, meterCells, normalizeSettings, stripLayout, stripWidths, tokenCells, windowEntries } from '../hooks/row'
+import {
+  composeRow,
+  meterBar,
+  meterCells,
+  normalizeSettings,
+  pulseAmount,
+  stripLayout,
+  stripWidths,
+  sweepAmount,
+  tokenCells,
+  windowEntries,
+} from '../hooks/row'
 import type { StripItem, TokenFigure } from '../hooks/row'
 import { CHART_STYLE_IDS, METER_STYLE_IDS, STRIP_STYLE_IDS } from '../hooks/styles'
 
@@ -363,12 +374,27 @@ test('shimmer sweeps the current turn while tokens flow', () => {
   const anim = createAnim()
   syncTargets(anim, scene, settings, 's')
   markFlow(anim)
+  // The first frame of a flow: the sweep has not entered yet and the glow is a third in.
+  const first = bar(composeRow(scene, anim, settings, 100, false).cells)
+  expect(first.length).toBe(17)
+  expect(first.every(c => c.fg === lighten(LIVE, 0.1 / 3))).toBe(true)
+
+  // Two frames on, at full strength: the band is in from the left, softest at its edge, over a bar lifted all over.
+  advance(anim, settings.effects)
+  markFlow(anim)
+  advance(anim, settings.effects)
   const flowing = bar(composeRow(scene, anim, settings, 100, false).cells)
   expect(flowing.length).toBe(17)
-  expect(flowing[0]?.fg).toBe(lighten(LIVE, 0.55))
-  expect(flowing[1]?.fg).toBe(lighten(LIVE, 0.3))
-  expect(flowing.slice(2).every(c => c.fg === LIVE)).toBe(true)
-  expect(lighten(LIVE, 0.55)).toBe(0xdbdbed)
+  const glow = lighten(LIVE, 0.1)
+  const lift = (c: Cell | undefined) => (c?.fg ?? 0) & 0xff
+  expect(lift(flowing[0])).toBeGreaterThan(lift(flowing[1]))
+  expect(lift(flowing[1])).toBeGreaterThan(lift(flowing[2]))
+  expect(flowing.slice(3).every(c => c.fg === glow)).toBe(true)
+  expect(flowing.every(c => c.fg !== LIVE && lift(c) <= (lighten(LIVE, 0.5) & 0xff))).toBe(true)
+
+  // The flow fades out over its last frames, then the bar is plain again.
+  for (let i = 0; i < 5; i++) advance(anim, settings.effects)
+  expect(bar(composeRow(scene, anim, settings, 100, false).cells).every(c => c.fg === LIVE)).toBe(true)
 
   const quiet = createAnim()
   syncTargets(quiet, scene, settings, 's')
@@ -382,11 +408,28 @@ test('shimmer sweeps the current turn while tokens flow', () => {
   expect(bar(composeRow(scene, still, settings, 100, true).cells).every(c => c.fg === LIVE)).toBe(true)
 
   const chart = normalizeSettings({ reacts: 'off', stock: 'off', celebrate: 'off', style: 'chart' })
-  const pulse = createAnim(2)
+  const pulse = createAnim()
   syncTargets(pulse, scene, chart, 's')
   markFlow(pulse)
-  // ● EXPLAI (8 cells) and its divider put the 16 bars at cells 21 to 36.
-  expect(composeRow(scene, pulse, chart, 100, false).cells[36]?.fg).toBe(lighten(LIVE, 0.55))
+  for (let i = 0; i < 6; i++) {
+    advance(pulse, chart.effects)
+    markFlow(pulse)
+  }
+  // ● EXPLAI (8 cells) and its divider put the 16 bars at cells 21 to 36. Halfway through its breath the bar is at its brightest.
+  expect(composeRow(scene, pulse, chart, 100, false).cells[36]?.fg).toBe(lighten(LIVE, 0.5))
+})
+
+test('sweepAmount glides in from off the edge, rests on the glow, and pulseAmount breathes smoothly', () => {
+  expect(Array.from({ length: 17 }, (_, i) => sweepAmount(i, 17, 0)).every(a => a === 0.1)).toBe(true)
+  for (let t = 0; t < 40; t++) {
+    const row = Array.from({ length: 17 }, (_, i) => sweepAmount(i, 17, t))
+    expect(row.every(a => a >= 0.1 && a <= 0.5)).toBe(true)
+  }
+  // 17 cells: 19 frames of travel, then 6 of rest on the glow alone.
+  expect(Array.from({ length: 17 }, (_, i) => sweepAmount(i, 17, 20)).every(a => a === 0.1)).toBe(true)
+  expect(pulseAmount(0)).toBe(0.1)
+  expect(pulseAmount(6)).toBe(0.5)
+  expect(Math.abs(pulseAmount(1) - pulseAmount(0))).toBeLessThan(0.05)
 })
 
 test('narrow rows drop whole groups in order, never leaving a bar dangling or doubled', () => {
