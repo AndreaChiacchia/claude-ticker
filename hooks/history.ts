@@ -84,6 +84,11 @@ export function upsertRecord(records: RecordEntry[], entry: RecordEntry): Record
   return mergeRecord(rest, entry)
 }
 
+/** True when `a` is an array holding exactly the items of `b`, in order (by identity): a list that would be written unchanged. */
+export function sameItems(a: unknown, b: readonly unknown[]): boolean {
+  return Array.isArray(a) && a.length === b.length && a.every((x, i) => x === b[i])
+}
+
 /**
  * The turns of `growing` that some run in `runs` still names as owner, in their order. It never adds a turn, and it
  * returns the same array when nothing is dropped (so a caller writes nothing).

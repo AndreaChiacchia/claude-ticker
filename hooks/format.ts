@@ -133,14 +133,26 @@ export function toneFor(cost: number, sessionCosts: number[]): Tone {
  * null (gray) while the session is young, as `toneFor` is neutral then.
  */
 export function rampFor(cost: number, sessionCosts: number[]): 0 | 1 | 2 | 3 | null {
-  if (sessionCosts.length <= 3) return null
-  const m = median(sessionCosts)
-  if (m <= 0) return null
-  if (cost >= 2 * m) return 3
-  if (cost >= m) return 2
-  if (cost >= 0.5 * m) return 1
+  return rampSteps(sessionCosts)(cost)
+}
 
-  return 0
+/**
+ * The ramp step of any cost against one session (see `rampFor`), the median taken once, at the first call:
+ * for a draw that colors many turns.
+ */
+export function rampSteps(sessionCosts: number[]): (cost: number) => 0 | 1 | 2 | 3 | null {
+  if (sessionCosts.length <= 3) return () => null
+  let cached: number | undefined
+
+  return cost => {
+    const m = cached ?? (cached = median(sessionCosts))
+    if (m <= 0) return null
+    if (cost >= 2 * m) return 3
+    if (cost >= m) return 2
+    if (cost >= 0.5 * m) return 1
+
+    return 0
+  }
 }
 
 /** The cost at the bottom of the chart and meter scale: below it a bar is a sliver. */
@@ -163,9 +175,10 @@ export function logShare(cost: number): number {
 const pad2 = (n: number): string => String(n).padStart(2, '0')
 
 export function formatDuration(ms: number): string {
-  if (ms < 60_000) return `${Math.round(ms / 1000)}s`
+  const s = Math.round(ms / 1000)
+  if (s < 60) return `${s}s`
 
-  return `${Math.floor(ms / 60_000)}m${pad2(Math.min(59, Math.round((ms % 60_000) / 1000)))}s`
+  return `${Math.floor(s / 60)}m${pad2(s % 60)}s`
 }
 
 /** `DD/MM HH:MM` in the local time `offsetMin` minutes east of UTC. */

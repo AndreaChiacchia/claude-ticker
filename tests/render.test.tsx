@@ -85,8 +85,11 @@ function world(on: On, stacked: string[] = []) {
   const clock = mock.clock(on, { now: NOW })
   // The mod's own key-value store, in memory; the test reads it back through `store`.
   const store = new Map<string, unknown>()
+  // The keys written, in order: a test can tell that a key was not written again.
+  const storeSets: string[] = []
   on('store.get', (_$, e) => ({ value: store.get(e.key) }))
   on('store.set', (_$, e) => {
+    storeSets.push(e.key)
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined }
   })
@@ -159,7 +162,7 @@ function world(on: On, stacked: string[] = []) {
     )
   })
 
-  return { state, blits, toasts, clock, store }
+  return { state, blits, toasts, clock, store, storeSets }
 }
 
 type World = ReturnType<typeof world>
@@ -316,9 +319,13 @@ test('the row animates while a turn runs and goes still when idle', async ($, on
   await $.turn.start({ text: 'explain the cache', turnId: 'live-1' } as never)
   const ui = await mount($)
   expect(raster(await drawing(ui))).toBeDefined()
-  await w.clock.advance(300)
-  expect(w.blits.length).toBe(3)
+  await w.clock.advance(1000)
+  const running = w.blits.length
+  // The probe and at least one marker pulse; the frames that repeat the last one are not sent (10 frames passed).
+  expect(running).toBeGreaterThanOrEqual(2)
+  expect(running).toBeLessThan(10)
   expect(w.blits.every(b => b.requestId === 'hint' && b.key === 'row')).toBe(true)
+  for (let i = 1; i < w.blits.length; i++) expect(w.blits[i]?.cells).not.toBe(w.blits[i - 1]?.cells)
 
   // The turn ends: the figures settle in a second or two and the timer stops.
   w.state.ledger = 0.11
@@ -333,7 +340,7 @@ test('the row animates while a turn runs and goes still when idle', async ($, on
   await drawing(ui)
   await w.clock.advance(3000)
   const settled = w.blits.length
-  expect(settled).toBeGreaterThan(3)
+  expect(settled).toBeGreaterThan(running)
   await w.clock.advance(2000)
   expect(w.blits.length).toBe(settled)
 })
@@ -344,13 +351,15 @@ test('a refused blit after it worked stops the timer; the next draw is a Raster 
   const ui = await mount($)
   await drawing(ui)
   await w.clock.advance(300)
-  expect(w.blits.length).toBe(3)
+  const ok = w.blits.length
+  expect(ok).toBeGreaterThanOrEqual(1)
 
   w.state.blitAnswer = { deny: 'not mounted' }
-  await w.clock.advance(100)
-  expect(w.blits.length).toBe(4)
+  // The next frame that differs (the marker pulse) is refused, and the timer stops.
+  await w.clock.advance(1000)
+  expect(w.blits.length).toBe(ok + 1)
   await w.clock.advance(500)
-  expect(w.blits.length).toBe(4)
+  expect(w.blits.length).toBe(ok + 1)
   // Blits worked before, so the next draw is a Raster again.
   expect(raster(await drawing(ui))).toBeDefined()
 })
@@ -384,6 +393,32 @@ test('tool calls flash their name', async ($, on) => {
   await w.clock.advance(1000)
   expect(blitText(w.blits.at(-1))).not.toContain('Bash')
 })
+
+test(
+  'a frame that looks like the last one is not blitted again',
+  { options: { reacts: 'off', stock: 'off', celebrate: 'off', grow: 'off' } },
+  async ($, on) => {
+    const w = world(on)
+    await $.turn.start({ text: 'explain the cache', turnId: 'live-1' } as never)
+    const ui = await mount($)
+    await drawing(ui)
+    // Shimmer keeps the timer running through a live turn, and nothing else moves: only the probe goes out.
+    await w.clock.advance(1000)
+    expect(w.blits.length).toBe(1)
+    w.state.ledger = 0.01
+    w.state.chunks = [{ kind: 'text', index: 0, text: 'x'.repeat(480) } as never]
+    await step($, 'live-1')
+    await drawing(ui)
+    await w.clock.advance(500)
+    // The shimmer moves.
+    expect(w.blits.length).toBeGreaterThan(2)
+    const after = w.blits.length
+    await w.clock.advance(1000)
+    // The flow is over: identical frames again.
+    expect(w.blits.length).toBe(after)
+    for (let i = 1; i < w.blits.length; i++) expect(w.blits[i]?.cells).not.toBe(w.blits[i - 1]?.cells)
+  },
+)
 
 test(
   'streamed text makes the live bar shimmer',
@@ -487,6 +522,19 @@ test('Σ follows the ledger, the session is saved, /clear starts over', { option
   await turn($, w, 'next thing', usage(), 0.05)
   const fresh = w.store.get('session:sess-2') as { entries: { n: number }[] }
   expect(fresh.entries[0]?.n).toBe(1)
+})
+
+test('a turn that changes neither the index nor the records writes neither', { options: EFFECTS_OFF }, async ($, on) => {
+  const w = world(on)
+  await turn($, w, 'alpha', usage(), 0.11)
+  w.storeSets.length = 0
+  // The ledger did not move, so this turn costs 0 and cannot enter the records.
+  await turn($, w, 'bravo', usage(), 0.11)
+  expect(w.storeSets).toContain('session:sess-1')
+  expect(w.storeSets).not.toContain('sessions')
+  expect(w.storeSets).not.toContain('records')
+  expect(w.store.get('sessions')).toEqual(['sess-1'])
+  expect((w.store.get('records') as unknown[]).length).toBe(1)
 })
 
 test(
@@ -760,6 +808,38 @@ test('a background helper keeps crediting the turn that launched it', { options:
   const saved = w.store.get('records') as { costUsd: number; n: number }[]
   expect(saved.filter(r => r.n === 1).length).toBe(1)
   expect(saved.find(r => r.n === 1)?.costUsd).toBe(1.125)
+})
+
+test('a helper that answers again writes only what changed', { options: EFFECTS_OFF }, async ($, on) => {
+  const w = world(on)
+  /** Every write the mod made to its state, per key. */
+  let writes = new Map<string, number>()
+  on('state.set', (_$, e, next) => {
+    const write = e as unknown as { plugin?: string; key?: string }
+    if (write.plugin === 'claudeticker' && typeof write.key === 'string') writes.set(write.key, (writes.get(write.key) ?? 0) + 1)
+
+    return next(e)
+  })
+  await helperWorking($, w)
+  // From here on, only what the same helper's second answer writes is counted.
+  writes = new Map()
+  // The same helper answers again, its run is reported again, and a cost reading changes nothing.
+  w.state.ledgerOnStep = 1.0
+  await step($, 'h1', 'ag1')
+  await $.turn.start({ text: 'dig', turnId: 'h1b', agentId: 'ag1' } as never)
+  await $.session.measure({
+    context: { tokens: 1, window: 1_000_000, percent: 0 },
+    rateLimits: [],
+    cost: { usd: 1.0 },
+    changed: ['cost'],
+  } as never)
+  expect(writes.get('growing') ?? 0).toBe(0)
+  expect(writes.get('live') ?? 0).toBe(0)
+  expect(writes.get('openRuns') ?? 0).toBe(0)
+  // The step was credited to the turn.
+  expect(writes.get('tape') ?? 0).toBeGreaterThan(0)
+  const saved = w.store.get('session:sess-1') as { entries: { costUsd: number }[] }
+  expect(saved.entries[0]?.costUsd).toBe(1.0)
 })
 
 /** Turn 1 launches a background helper and ends at $0.125; the helper answers once, taking turn 1 to $0.625. */

@@ -32,7 +32,7 @@ import {
   textCells,
 } from './cells'
 import type { Cell, Display } from './cells'
-import { formatCost, formatDelta, formatPercentDelta, formatTokens, logShare, rampFor } from './format'
+import { formatCost, formatDelta, formatPercentDelta, formatTokens, logShare, rampSteps } from './format'
 import type { Delta } from './format'
 import {
   CHART_STYLES,
@@ -375,6 +375,8 @@ type Ctx = {
   entries: Entry[]
   live: Live | null
   costs: number[]
+  /** The ramp step of a cost against this session's turns: `rampSteps(costs)`, the median taken once per draw. */
+  ramp: (cost: number) => 0 | 1 | 2 | 3 | null
   /** Finished turns with a background helper still at work, by last activity (the most recent last). */
   growing: number[]
   /** The number of the newest finished turn (0 when none). */
@@ -440,6 +442,7 @@ function makeCtx(scene: Scene, anim: Anim, settings: Settings, still: boolean): 
     entries,
     live,
     costs,
+    ramp: rampSteps(costs),
     growing: scene.growing,
     lastN,
     isGrowing,
@@ -620,7 +623,7 @@ function meterVisual(c: Ctx): Visual {
       const key = `meter:${c.n}`
       const f = ease(c, key, logShare(c.turnTarget))
       const isMoving = c.useTween && isTweening(c.anim, key)
-      const fillTarget = c.live !== null || c.isGrowing ? LIVE : rampColor(rampFor(c.turnTarget, c.costs))
+      const fillTarget = c.live !== null || c.isGrowing ? LIVE : rampColor(c.ramp(c.turnTarget))
       const fill = easeColor(c, `c:meter:${c.n}`, fillTarget)
       const { cells: bar, from, to } = meterBar(B, f, fill, isMoving, c.turnTarget > 0, c.settings.meterStyle)
       const shine = shimmerOf(c, c.live !== null ? null : c.n)
@@ -657,7 +660,7 @@ function chartVisual(c: Ctx): Visual {
         return {
           n: e.n,
           value: e.costUsd,
-          color: isFocus ? LIVE : rampColor(rampFor(e.costUsd, c.costs)),
+          color: isFocus ? LIVE : rampColor(c.ramp(e.costUsd)),
           isLive: false,
           isFocus,
         }
@@ -748,8 +751,8 @@ function stripVisual(c: Ctx): Visual {
             : b.kind === 'leaving'
               ? old === undefined
                 ? FIGURES
-                : rampColor(rampFor(old.costUsd, c.costs))
-              : rampColor(rampFor(b.target, c.costs))
+                : rampColor(c.ramp(old.costUsd))
+              : rampColor(c.ramp(b.target))
         let color = easeColor(c, `c:${b.key}`, base)
         if ((b.kind === 'live' || isFocus) && c.isBump) color = LIVE_BUMP
         const shine = b.kind === 'live' ? shimmerOf(c, null) : b.kind === 'turn' ? shimmerOf(c, b.n) : 0
@@ -825,10 +828,10 @@ export function composeRow(scene: Scene, anim: Anim, settings: Settings, cols: n
   if (c === null) {
     const sigma = scene.ledger ?? scene.entries.reduce((s, x) => s + x.costUsd, 0)
     const bare: Ctx = {
-      anim, settings, still, entries: [], live: null, costs: [], growing: [], lastN: 0, isGrowing: false,
+      anim, settings, still, entries: [], live: null, costs: [], ramp: () => null, growing: [], lastN: 0, isGrowing: false,
       isOlder: false, prevCost: undefined, fg: DEFAULT,
       n: 0, symbol: '', prompt: '', turnTarget: 0, turnValue: 0, sigmaValue: still ? sigma : anim.sigma.shown,
-      tokensIn: 0, tokensOut: 0, cacheRead: 0, isEmptyLive: false, isBump: false, isFlowing: false,
+      tokensIn: 0, tokensOut: 0, cacheRead: 0, isEmptyLive: false, isBump: false, isFlowing: false, flowFade: 0,
       useTween: false, keys: new Set(),
     }
 

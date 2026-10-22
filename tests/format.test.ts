@@ -6,11 +6,13 @@ import {
   cacheHit,
   formatCost,
   formatDelta,
+  formatDuration,
   formatPercentDelta,
   formatTokens,
   logShare,
   promptSnippet,
   rampFor,
+  rampSteps,
   shortTool,
   symbolFor,
   toneFor,
@@ -25,6 +27,7 @@ import {
   pushIndex,
   reconcileGrowing,
   renumberAfterClear,
+  sameItems,
   topSessions,
   upsertRecord,
 } from '../hooks/history'
@@ -121,6 +124,26 @@ test('rampFor puts a turn on the teal scale against the session median; null whi
   expect(rampFor(0, [0, 0, 0, 0])).toBe(null)
 })
 
+test('rampSteps gives what rampFor gives, the median taken once', () => {
+  const costs = [0.1, 0.2, 0.3, 0.9]
+  const step = rampSteps(costs)
+  expect(step(0.9)).toBe(3)
+  expect(step(0.3)).toBe(2)
+  expect(step(0.2)).toBe(1)
+  expect(step(0.1)).toBe(0)
+  expect(rampSteps([0.1, 0.2, 0.9])(0.9)).toBe(null)
+  expect(rampSteps([0, 0, 0, 0])(0)).toBe(null)
+})
+
+test('formatDuration rounds to whole seconds before it splits minutes', () => {
+  expect(formatDuration(4000)).toBe('4s')
+  expect(formatDuration(59_400)).toBe('59s')
+  expect(formatDuration(59_600)).toBe('1m00s')
+  expect(formatDuration(61_000)).toBe('1m01s')
+  expect(formatDuration(119_600)).toBe('2m00s')
+  expect(formatDuration(3_600_000)).toBe('60m00s')
+})
+
 test('logShare puts a cost on a fixed log dollar scale: full at $2, about 1.9x per eighth', () => {
   const level = (cost: number): number => (cost <= 0 ? 0 : Math.min(8, Math.max(1, Math.round(logShare(cost) * 8))))
   expect([0.01, 0.02, 0.05, 0.1, 0.25, 0.3, 1, 1.2, 2, 5].map(level)).toEqual([1, 2, 3, 4, 5, 5, 7, 7, 8, 8])
@@ -151,6 +174,16 @@ test('mergeRecord keeps the 10 priciest, an older tie ahead, and ignores free tu
   const tied = mergeRecord([rec(1, 0.5)], rec(2, 0.5))
   expect(tied.map(r => r.n)).toEqual([1, 2])
   expect(mergeRecord(tied, rec(3, 0))).toBe(tied)
+})
+
+test('sameItems tells a list that would be written unchanged', () => {
+  expect(sameItems(['a', 'b'], ['a', 'b'])).toBe(true)
+  expect(sameItems(['a'], ['a', 'b'])).toBe(false)
+  expect(sameItems(undefined, [])).toBe(false)
+  expect(sameItems([], [])).toBe(true)
+  const r = { n: 1 }
+  expect(sameItems([r], [r])).toBe(true)
+  expect(sameItems([{ n: 1 }], [r])).toBe(false)
 })
 
 test('encodeCells packs little-endian [code point, foreground, background] triplets', () => {

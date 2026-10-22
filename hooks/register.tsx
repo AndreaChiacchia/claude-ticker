@@ -27,7 +27,7 @@ import {
   formatDuration,
   formatTokens,
   promptSnippet,
-  rampFor,
+  rampSteps,
   sessionFigures,
   stamp,
   symbolFor,
@@ -49,6 +49,7 @@ import {
   pushIndex,
   reconcileGrowing,
   renumberAfterClear,
+  sameItems,
   topSessions,
   upsertRecord,
 } from './history'
@@ -95,6 +96,11 @@ let scene: Scene | null = null
 let anim: Anim = createAnim()
 /** Blits accepted since the last render that drew the Raster. */
 let framesSinceMount = 0
+/**
+ * The cells of the last blit the surface took since the Raster was drawn; null right after a draw, so the first
+ * frame always goes out (it is the probe that tells a slot that refuses blits).
+ */
+let lastBlit: string | null = null
 /** Fresh draws whose first blit was refused, while no blit has ever been accepted. */
 let refusedMounts = 0
 let everBlitted = false
@@ -141,23 +147,29 @@ async function saveSession($: EngineInterface, t: Tape): Promise<void> {
   const id = t.sessionId
   if (id === null) return
   await $.store.set(SESSION_PREFIX + id, { id, updatedAt: await $.clock.now(), entries: t.entries })
-  const { index, dropped } = pushIndex(await $.store.get(INDEX_KEY), id)
-  await $.store.set(INDEX_KEY, index)
+  const stored = await $.store.get(INDEX_KEY)
+  const { index, dropped } = pushIndex(stored, id)
+  if (!sameItems(stored, index)) await $.store.set(INDEX_KEY, index)
   for (const d of dropped) await $.store.delete(SESSION_PREFIX + d)
 }
 
 /** A turn whose helper starts working joins `growing` as the most recent. */
 async function addGrowing($: EngineInterface, n: number): Promise<void> {
-  await update($, growing, old => (old.includes(n) ? old : [...old, n]))
+  const current = await read($, growing)
+  if (!current.includes(n)) await update($, growing, old => (old.includes(n) ? old : [...old, n]))
 }
 
 /** A credited response is activity: its turn moves to the end of `growing` (no write when it is there already). */
 async function touchGrowing($: EngineInterface, n: number): Promise<void> {
-  await update($, growing, old => (old.includes(n) && old.at(-1) !== n ? [...old.filter(x => x !== n), n] : old))
+  const current = await read($, growing)
+  if (current.includes(n) && current.at(-1) !== n) {
+    await update($, growing, old => (old.includes(n) && old.at(-1) !== n ? [...old.filter(x => x !== n), n] : old))
+  }
 }
 
 async function removeGrowing($: EngineInterface, n: number): Promise<void> {
-  await update($, growing, old => (old.includes(n) ? old.filter(x => x !== n) : old))
+  const current = await read($, growing)
+  if (current.includes(n)) await update($, growing, old => (old.includes(n) ? old.filter(x => x !== n) : old))
 }
 
 // ---- where the session lives, and its summary ----------------------------------------------------
@@ -294,9 +306,12 @@ async function creditEntry($: EngineInterface, n: number, usage: Usage, delta: n
   const t = await read($, tape)
   await saveSession($, t)
   if (t.sessionId !== null) {
-    const merged = upsertRecord(await read($, records), { ...entry, sessionId: t.sessionId })
-    await update($, records, () => merged)
-    await $.store.set(RECORDS_KEY, merged)
+    const old = await read($, records)
+    const merged = upsertRecord(old, { ...entry, sessionId: t.sessionId })
+    if (!sameItems(old, merged)) {
+      await update($, records, () => merged)
+      await $.store.set(RECORDS_KEY, merged)
+    }
   }
   if (toastOn && hit.others.length >= 3 && entry.costUsd > Math.max(...hit.others) && !toasted.has(n)) {
     toasted.add(n)
@@ -373,10 +388,17 @@ async function step($: EngineInterface): Promise<void> {
     // A hold may expire between renders: the focus is chosen again on every frame.
     syncFocus(anim, scene, settings.effects.stock, FOCUS_HOLD)
     const composed = composeRow(scene, anim, settings, target.cols, false)
-    const r = await $.ui.blit({ requestId: target.requestId, key: RASTER_KEY, cells: encodeCells(composed.cells) })
+    const cells = encodeCells(composed.cells)
+    if (cells === lastBlit) {
+      if (!needsTimer()) stopTimer()
+
+      return
+    }
+    const r = await $.ui.blit({ requestId: target.requestId, key: RASTER_KEY, cells })
     if (r.deny === undefined) {
       everBlitted = true
       framesSinceMount += 1
+      lastBlit = cells
       if (!needsTimer()) stopTimer()
     } else if (framesSinceMount === 0 && !everBlitted) {
       // The first blit after a fresh draw was refused: this slot may not take blits. A fresh mount retries.
@@ -408,6 +430,7 @@ export const register: Register = (on, options) => {
   scene = null
   anim = createAnim()
   framesSinceMount = 0
+  lastBlit = null
   refusedMounts = 0
   everBlitted = false
   isStaticFallback = false
@@ -432,10 +455,12 @@ export const register: Register = (on, options) => {
     }
     if (agents !== null) {
       const listed = agents
-      await update($, openRuns, old => pruneRuns(old, listed))
+      const open = await read($, openRuns)
+      if (pruneRuns(open, listed) !== open) await update($, openRuns, old => pruneRuns(old, listed))
     }
     const runs = await read($, openRuns)
-    await update($, growing, old => reconcileGrowing(old, runs))
+    const held = await read($, growing)
+    if (reconcileGrowing(held, runs) !== held) await update($, growing, old => reconcileGrowing(old, runs))
     await loadSummaries($)
     const u = await $.session.usage()
     await setLedger($, u.cost?.usd ?? null)
@@ -486,7 +511,9 @@ export const register: Register = (on, options) => {
       }
       if (owner !== undefined) {
         const n = owner
-        await update($, owners, old => (old[agentId] === undefined ? { ...old, [agentId]: n } : old))
+        if ((await read($, owners))[agentId] === undefined) {
+          await update($, owners, old => (old[agentId] === undefined ? { ...old, [agentId]: n } : old))
+        }
       }
     }
 
@@ -499,7 +526,9 @@ export const register: Register = (on, options) => {
       const owner = (await read($, owners))[e.agentId]
       if (owner !== undefined) {
         const id = e.agentId
-        await update($, openRuns, old => (old[id] === owner ? old : { ...old, [id]: owner }))
+        if ((await read($, openRuns))[id] !== owner) {
+          await update($, openRuns, old => (old[id] === owner ? old : { ...old, [id]: owner }))
+        }
         if ((await read($, tape)).entries.some(x => x.n === owner)) await addGrowing($, owner)
       }
       if (settings.effects.reacts) bump(anim)
@@ -613,7 +642,15 @@ export const register: Register = (on, options) => {
     if (e.cost) await setLedger($, e.cost.usd)
     const cost = e.cost
     if (cost && e.changed.includes('cost')) {
-      await update($, live, l => (l !== null && l.startUsd !== null ? { ...l, costUsd: liveCost(l, cost.usd, l.foreignUsd) } : l))
+      const l = await read($, live)
+      if (l !== null && l.startUsd !== null && liveCost(l, cost.usd, l.foreignUsd) !== l.costUsd) {
+        await update($, live, cur => {
+          if (cur === null || cur.startUsd === null) return cur
+          const usd = liveCost(cur, cost.usd, cur.foreignUsd)
+
+          return usd === cur.costUsd ? cur : { ...cur, costUsd: usd }
+        })
+      }
       const id = (await read($, tape)).sessionId
       const current = id === null ? undefined : (await read($, summaries))[id]
       if (current !== undefined && Math.abs(cost.usd - current.total) >= 0.005) await updateSummary($, { total: cost.usd }, false)
@@ -661,9 +698,12 @@ export const register: Register = (on, options) => {
     await update($, live, () => null)
     await saveSession($, nt)
     if (t.sessionId !== null) {
-      const merged = mergeRecord(await read($, records), { ...entry, sessionId: t.sessionId })
-      await update($, records, () => merged)
-      await $.store.set(RECORDS_KEY, merged)
+      const old = await read($, records)
+      const merged = mergeRecord(old, { ...entry, sessionId: t.sessionId })
+      if (!sameItems(old, merged)) {
+        await update($, records, () => merged)
+        await $.store.set(RECORDS_KEY, merged)
+      }
     }
     if (toastOn && prevCount >= 3 && entry.costUsd > prevMax) {
       toasted.add(n)
@@ -767,6 +807,7 @@ export const register: Register = (on, options) => {
       const composed = composeRow(scene, anim, settings, cols, false)
       band = { requestId: e.requestId, cols }
       framesSinceMount = 0
+      lastBlit = null
       node = <Raster key={RASTER_KEY} columns={cols} rows={1} cells={encodeCells(composed.cells)} />
       kick($)
     }
@@ -802,6 +843,7 @@ export const register: Register = (on, options) => {
     const offsetMin = -new Date(now).getTimezoneOffset()
     const { entries } = t
     const costs = entries.map(x => x.costUsd)
+    const ramp = rampSteps(costs)
     const { sigma, count, avg } = sessionFigures(entries, lg)
     const sum = costs.reduce((s, x) => s + x, 0)
     const outside = lg !== null && lg - sum >= 0.0005 ? lg - sum : null
@@ -871,7 +913,7 @@ export const register: Register = (on, options) => {
           </Text>
         )}
         {newest.map(({ x, prev }) => {
-          const swatch = rampColor(rampFor(x.costUsd, costs))
+          const swatch = rampColor(ramp(x.costUsd))
           const delta = formatDelta(x.costUsd, prev?.costUsd)
           const deltaColor = delta === null ? DEFAULT : delta.dir === 'up' ? UP : delta.dir === 'down' ? DOWN : FLAT
           const number = String(x.n) + (gr.includes(x.n) ? '◐' : '')
